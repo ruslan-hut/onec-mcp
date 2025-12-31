@@ -57,7 +57,7 @@ Content-Type: application/json
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `query` | string | Search query (name, INN, phone, etc.) |
+| `query` | string | Search query (name, phone, etc.) |
 | `limit` | integer | Maximum results to return |
 
 ### Response
@@ -68,14 +68,14 @@ Content-Type: application/json
     {
       "id": "e5d7a8b2-1234-5678-9abc-def012345678",
       "label": "Shatokhin Andriy Petrovych",
-      "inn": "1234567890",
+      "phone": "+380501234567",
       "city": "Madrid",
       "archived": false
     },
     {
       "id": "f6e8b9c3-2345-6789-abcd-ef0123456789",
       "label": "Shatokhin Ivan Sergiyovych",
-      "inn": "0987654321",
+      "phone": "+380509876543",
       "city": "Kyiv",
       "archived": false
     }
@@ -88,14 +88,14 @@ Content-Type: application/json
 | `candidates` | array | Yes | List of matching customers |
 | `candidates[].id` | string | Yes | Customer GUID (unique identifier) |
 | `candidates[].label` | string | Yes | Human-readable name for display |
-| `candidates[].inn` | string | No | Tax ID for disambiguation |
+| `candidates[].phone` | string | No | Phone number for disambiguation |
 | `candidates[].city` | string | No | City for disambiguation |
 | `candidates[].archived` | boolean | No | Whether customer is archived |
 
 ### Notes
 
 - `label` should be human-readable for AI disambiguation
-- Include distinguishing fields (INN, city, phone, type) when available
+- Include distinguishing fields (phone, city, type) when available
 - Return empty `candidates` array if no matches found
 - Respect the `limit` parameter
 
@@ -290,7 +290,7 @@ Function ResolveCustomer(Request)
         Candidate = New Structure;
         Candidate.Insert("id", String(Selection.Ref.UUID()));
         Candidate.Insert("label", Selection.Description);
-        Candidate.Insert("inn", Selection.INN);
+        Candidate.Insert("phone", Selection.Phone);
         Candidate.Insert("city", Selection.City);
         Candidate.Insert("archived", Selection.DeletionMark);
         Candidates.Add(Candidate);

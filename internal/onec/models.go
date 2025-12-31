@@ -8,7 +8,7 @@ type ResolveRequest struct {
 type CustomerCandidate struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
-	INN      string `json:"inn,omitempty"`
+	Phone    string `json:"phone,omitempty"`
 	City     string `json:"city,omitempty"`
 	Archived bool   `json:"archived"`
 }

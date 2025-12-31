@@ -94,6 +94,6 @@ cp configs/config.yml configs/config.local.yml
 
 | Tool | Description |
 |------|-------------|
-| `resolve_customer` | Search customers by name, INN, etc. |
+| `resolve_customer` | Search customers by name, phone, etc. |
 | `resolve_warehouse` | Search warehouses by name or code |
 | `sales_report` | Get sales with filters and grouping |

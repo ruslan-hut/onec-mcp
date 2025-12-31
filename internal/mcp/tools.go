@@ -10,13 +10,13 @@ func GetTools() []Tool {
 	return []Tool{
 		{
 			Name:        ToolResolveCustomer,
-			Description: "Search customers by name, INN, or other identifying information. Returns a list of matching candidates for disambiguation.",
+			Description: "Search customers by name, phone, or other identifying information. Returns a list of matching candidates for disambiguation.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{
 						"type":        "string",
-						"description": "Search query (name, INN, phone, etc.)",
+						"description": "Search query (name, phone, etc.)",
 					},
 					"limit": map[string]any{
 						"type":        "integer",

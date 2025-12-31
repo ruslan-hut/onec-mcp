@@ -70,7 +70,7 @@ func (h *Handler) ResolveCustomer(w http.ResponseWriter, r *http.Request) {
 		apiResp.Candidates[i] = CustomerCandidate{
 			ID:       c.ID,
 			Label:    c.Label,
-			INN:      c.INN,
+			Phone:    c.Phone,
 			City:     c.City,
 			Archived: c.Archived,
 		}

@@ -58,7 +58,7 @@ Content-Type: application/json
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | string | Yes | Search query (name, INN, phone, etc.) |
+| `query` | string | Yes | Search query (name, phone, etc.) |
 | `limit` | integer | No | Max results (default: 10, max: `limits.resolve_limit`) |
 
 **Response:**
@@ -68,7 +68,7 @@ Content-Type: application/json
     {
       "id": "GUID-1",
       "label": "Shatokhin Andriy Petrovych",
-      "inn": "1234567890",
+      "phone": "+380501234567",
       "city": "Madrid",
       "archived": false
     }
@@ -81,7 +81,7 @@ Content-Type: application/json
 | `candidates` | array | List of matching customers |
 | `candidates[].id` | string | Customer GUID |
 | `candidates[].label` | string | Human-readable name |
-| `candidates[].inn` | string | Tax ID (optional) |
+| `candidates[].phone` | string | Phone number (optional) |
 | `candidates[].city` | string | City (optional) |
 | `candidates[].archived` | boolean | Archive status |
 
@@ -263,7 +263,7 @@ Get available tools and their JSON schemas.
     "tools": [
       {
         "name": "resolve_customer",
-        "description": "Search customers by name, INN, or other identifying information...",
+        "description": "Search customers by name, phone, or other identifying information...",
         "inputSchema": { ... }
       },
       {
