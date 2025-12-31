@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"example.com/mcp-sales-mvp/internal/config"
 )
@@ -68,11 +69,11 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.Header.Set("Authorization", "Bearer "+c.password)
 	}
 
-	c.logger.Debug("1C request", "method", method, "path", path)
+	start := time.Now()
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.logger.Error("1C request failed", "method", method, "path", path, "error", err)
+		c.logger.Error("1C request", "method", method, "path", path, "error", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer func(Body io.ReadCloser) {
@@ -87,12 +88,14 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	c.logger.Debug("1C response", "method", method, "path", path, "status", resp.StatusCode)
+	duration := time.Since(start).Milliseconds()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		c.logger.Error("1C error response", "method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
+		c.logger.Error("1C request", "method", method, "path", path, "status", resp.StatusCode, "duration_ms", duration, "body", string(respBody))
 		return fmt.Errorf("1C returned status %d: %s", resp.StatusCode, string(respBody))
 	}
+
+	c.logger.Debug("1C request", "method", method, "path", path, "status", resp.StatusCode, "duration_ms", duration)
 
 	if result != nil {
 		if err := json.Unmarshal(respBody, result); err != nil {
