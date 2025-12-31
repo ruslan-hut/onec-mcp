@@ -1,0 +1,76 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o onec-mcp ./cmd/server
+
+      - name: Generate config from template
+        run: |
+          export ONEC_BASE_URL="${{ secrets.ONEC_BASE_URL }}"
+          export ONEC_AUTH_TYPE="${{ secrets.ONEC_AUTH_TYPE }}"
+          export ONEC_AUTH_USERNAME="${{ secrets.ONEC_AUTH_USERNAME }}"
+          export ONEC_AUTH_PASSWORD="${{ secrets.ONEC_AUTH_PASSWORD }}"
+          export ONEC_TENANT_HEADER="${{ secrets.ONEC_TENANT_HEADER }}"
+          export ONEC_DEFAULT_TENANT="${{ secrets.ONEC_DEFAULT_TENANT }}"
+          export MCP_BEARER_TOKEN="${{ secrets.MCP_BEARER_TOKEN }}"
+          export API_BEARER_TOKEN="${{ secrets.API_BEARER_TOKEN }}"
+          envsubst < configs/config.prod.yml.tpl > onec-mcp.yml
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "onec-mcp,onec-mcp.yml,deploy/onec-mcp.service"
+          target: /tmp/onec-mcp-deploy/
+          strip_components: 0
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            sudo mkdir -p /etc/conf
+            sudo mkdir -p /opt/onec-mcp
+
+            sudo systemctl stop onec-mcp || true
+
+            sudo cp /tmp/onec-mcp-deploy/onec-mcp /opt/onec-mcp/onec-mcp
+            sudo chmod +x /opt/onec-mcp/onec-mcp
+
+            sudo cp /tmp/onec-mcp-deploy/onec-mcp.yml /etc/conf/onec-mcp.yml
+            sudo chmod 600 /etc/conf/onec-mcp.yml
+
+            sudo cp /tmp/onec-mcp-deploy/deploy/onec-mcp.service /etc/systemd/system/onec-mcp.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable onec-mcp
+            sudo systemctl start onec-mcp
+
+            rm -rf /tmp/onec-mcp-deploy
+
+            sleep 2
+            sudo systemctl status onec-mcp --no-pager

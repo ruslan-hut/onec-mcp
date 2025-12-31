@@ -1,0 +1,15 @@
+[Unit]
+Description=OneC MCP Gateway Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/onec-mcp
+Environment=CONFIG_PATH=/etc/conf/onec-mcp.yml
+ExecStart=/opt/onec-mcp/onec-mcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
