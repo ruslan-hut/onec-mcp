@@ -25,17 +25,52 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o onec-mcp ./cmd/server
 
-      - name: Generate config from template
+      - name: Generate config
+        env:
+          ONEC_BASE_URL: ${{ secrets.ONEC_BASE_URL }}
+          ONEC_AUTH_TYPE: ${{ secrets.ONEC_AUTH_TYPE }}
+          ONEC_AUTH_USERNAME: ${{ secrets.ONEC_AUTH_USERNAME }}
+          ONEC_AUTH_PASSWORD: ${{ secrets.ONEC_AUTH_PASSWORD }}
+          ONEC_TENANT_HEADER: ${{ secrets.ONEC_TENANT_HEADER }}
+          ONEC_DEFAULT_TENANT: ${{ secrets.ONEC_DEFAULT_TENANT }}
+          MCP_BEARER_TOKEN: ${{ secrets.MCP_BEARER_TOKEN }}
+          API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
         run: |
-          export ONEC_BASE_URL="${{ secrets.ONEC_BASE_URL }}"
-          export ONEC_AUTH_TYPE="${{ secrets.ONEC_AUTH_TYPE }}"
-          export ONEC_AUTH_USERNAME="${{ secrets.ONEC_AUTH_USERNAME }}"
-          export ONEC_AUTH_PASSWORD="${{ secrets.ONEC_AUTH_PASSWORD }}"
-          export ONEC_TENANT_HEADER="${{ secrets.ONEC_TENANT_HEADER }}"
-          export ONEC_DEFAULT_TENANT="${{ secrets.ONEC_DEFAULT_TENANT }}"
-          export MCP_BEARER_TOKEN="${{ secrets.MCP_BEARER_TOKEN }}"
-          export API_BEARER_TOKEN="${{ secrets.API_BEARER_TOKEN }}"
-          envsubst < configs/config.prod.yml.tpl > onec-mcp.yml
+          cat > onec-mcp.yml << 'EOF'
+          server:
+            host: 127.0.0.1
+            port: 8088
+
+          onec:
+            base_url: ""
+            timeout_ms: 8000
+            auth:
+              type: ""
+              username: ""
+              password: ""
+            tenant_header: ""
+            default_tenant: ""
+
+          limits:
+            resolve_limit: 10
+            max_rows: 5000
+
+          mcp:
+            enabled: true
+            bearer_token: ""
+
+          api:
+            bearer_token: ""
+          EOF
+
+          yq -i ".onec.base_url = strenv(ONEC_BASE_URL)" onec-mcp.yml
+          yq -i ".onec.auth.type = strenv(ONEC_AUTH_TYPE)" onec-mcp.yml
+          yq -i ".onec.auth.username = strenv(ONEC_AUTH_USERNAME)" onec-mcp.yml
+          yq -i ".onec.auth.password = strenv(ONEC_AUTH_PASSWORD)" onec-mcp.yml
+          yq -i ".onec.tenant_header = strenv(ONEC_TENANT_HEADER)" onec-mcp.yml
+          yq -i ".onec.default_tenant = strenv(ONEC_DEFAULT_TENANT)" onec-mcp.yml
+          yq -i ".mcp.bearer_token = strenv(MCP_BEARER_TOKEN)" onec-mcp.yml
+          yq -i ".api.bearer_token = strenv(API_BEARER_TOKEN)" onec-mcp.yml
 
       - name: Copy files to server
         uses: appleboy/scp-action@v0.1.7
