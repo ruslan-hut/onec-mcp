@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"example.com/mcp-sales-mvp/internal/config"
@@ -19,9 +20,10 @@ type Client struct {
 	password      string
 	tenantHeader  string
 	defaultTenant string
+	logger        *slog.Logger
 }
 
-func NewClient(cfg *config.OneCConfig) *Client {
+func NewClient(cfg *config.OneCConfig, logger *slog.Logger) *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout(),
@@ -32,6 +34,7 @@ func NewClient(cfg *config.OneCConfig) *Client {
 		password:      cfg.Auth.Password,
 		tenantHeader:  cfg.TenantHeader,
 		defaultTenant: cfg.DefaultTenant,
+		logger:        logger,
 	}
 }
 
@@ -65,18 +68,29 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.Header.Set("Authorization", "Bearer "+c.password)
 	}
 
+	c.logger.Debug("1C request", "method", method, "path", path)
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.logger.Error("1C request failed", "method", method, "path", path, "error", err)
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			c.logger.Error("1C response body close failed", "method", method, "path", path, "error", err)
+		}
+	}(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	c.logger.Debug("1C response", "method", method, "path", path, "status", resp.StatusCode)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.logger.Error("1C error response", "method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
 		return fmt.Errorf("1C returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 

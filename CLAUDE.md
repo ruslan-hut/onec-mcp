@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow Settings
+
+- **Never run builds or tests** - the user will build and test manually and report any errors
+- Do not run `go build`, `go test`, `go run`, or similar commands to verify changes
+
 ## Project Overview
 
 OneC MCP is a Go service that acts as a gateway between LLM/MCP clients and 1C ERP systems via HTTP. It exposes both REST API and MCP (Model Context Protocol) JSON-RPC 2.0 endpoints for customer/warehouse resolution and sales reporting.

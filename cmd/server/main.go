@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,12 +12,13 @@ import (
 
 	"example.com/mcp-sales-mvp/internal/api"
 	"example.com/mcp-sales-mvp/internal/config"
+	"example.com/mcp-sales-mvp/internal/logger"
 	"example.com/mcp-sales-mvp/internal/mcp"
 	"example.com/mcp-sales-mvp/internal/onec"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	log := logger.New()
 
 	configPath := "configs/config.yml"
 	if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
@@ -27,27 +27,27 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Error("failed to load config", "error", err)
+		log.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	onecClient := onec.NewClient(&cfg.OneC)
+	onecClient := onec.NewClient(&cfg.OneC, log)
 
-	handler := api.NewHandler(onecClient, cfg, logger)
+	handler := api.NewHandler(onecClient, cfg, log)
 
 	var mcpHandler http.Handler
 	if cfg.MCP.Enabled {
-		mcpHandler = mcp.NewHandler(onecClient, cfg, logger)
-		logger.Info("MCP endpoint enabled")
+		mcpHandler = mcp.NewHandler(onecClient, cfg, log)
+		log.Info("MCP endpoint enabled")
 	}
 
 	if cfg.API.BearerToken == "" {
-		logger.Warn("no bearer token provided, API disabled")
+		log.Warn("no bearer token provided, API disabled")
 	} else {
-		logger.Info("API enabled")
+		log.Info("API enabled")
 	}
 
-	router := api.NewRouter(handler, mcpHandler, cfg.API.BearerToken)
+	router := api.NewRouter(handler, mcpHandler, cfg.API.BearerToken, log)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
@@ -59,23 +59,23 @@ func main() {
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		logger.Info("starting server", "addr", addr)
+		log.Info("starting server", "addr", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server failed", "error", err)
+			log.Error("server failed", "error", err)
 			os.Exit(1)
 		}
 	}()
 
 	<-done
-	logger.Info("shutting down server")
+	log.Info("shutting down server")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown failed", "error", err)
+		log.Error("server shutdown failed", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("server stopped")
+	log.Info("server stopped")
 }
