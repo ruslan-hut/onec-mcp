@@ -92,6 +92,14 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		c.logger.Error("1C request", "method", method, "path", path, "status", resp.StatusCode, "duration_ms", duration, "body", string(respBody))
+
+		// Пробуем достать структурированный {error, message} из тела —
+		// 1С отдаёт его осмысленно, и клиент сможет показать пользователю реальную причину
+		apiErr := &APIError{StatusCode: resp.StatusCode}
+		if json.Unmarshal(respBody, apiErr) == nil && (apiErr.Code != "" || apiErr.Message != "") {
+			return apiErr
+		}
+
 		return fmt.Errorf("1C returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -134,11 +142,45 @@ func (c *Client) ResolveWarehouse(ctx context.Context, query string, limit int) 
 	return &resp, nil
 }
 
+func (c *Client) ResolveProduct(ctx context.Context, query string, limit int) (*ResolveProductResponse, error) {
+	req := ResolveRequest{
+		Query: query,
+		Limit: limit,
+	}
+
+	var resp ResolveProductResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/product", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 func (c *Client) SalesReport(ctx context.Context, req *SalesReportRequest) (*SalesReportResponse, error) {
 	var resp SalesReportResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/sales", req, &resp); err != nil {
 		return nil, err
 	}
 
+	return &resp, nil
+}
+
+func (c *Client) StockReport(ctx context.Context, req *StockReportRequest) (*StockReportResponse, error) {
+	var resp StockReportResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/stock", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+// VerifyMCPKey проверяет MCP-ключ через 1С. Возвращает APIError со статусом 401, если ключ невалиден —
+// вызывающий код должен это отличать от network/server ошибок.
+func (c *Client) VerifyMCPKey(ctx context.Context, key string) (*AuthVerifyResponse, error) {
+	req := AuthVerifyRequest{Key: key}
+	var resp AuthVerifyResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/auth/verify", req, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }

@@ -64,6 +64,7 @@ cp configs/config.yml configs/config.local.yml
 | [API Reference](docs/api.md) | REST and MCP endpoint specifications |
 | [Testing Guide](docs/testing.md) | What can be tested without 1C backend |
 | [1C Integration](docs/onec-integration.md) | Expected 1C endpoints and formats |
+| [OAuth Setup & Admin Guide](docs/oauth-setup.md) | Connecting Claude/ChatGPT, issuing per-user keys, audit log, troubleshooting |
 
 ## Project Structure
 
@@ -87,7 +88,9 @@ cp configs/config.yml configs/config.local.yml
 | `/health` | GET | Health check |
 | `/resolve/customer` | POST | Search customers |
 | `/resolve/warehouse` | POST | Search warehouses |
+| `/resolve/product` | POST | Search products |
 | `/reports/sales` | POST | Sales report |
+| `/reports/stock` | POST | Stock balance report |
 | `/mcp` | POST | MCP JSON-RPC 2.0 |
 
 ## MCP Tools
@@ -96,4 +99,6 @@ cp configs/config.yml configs/config.local.yml
 |------|-------------|
 | `resolve_customer` | Search customers by name, phone, etc. |
 | `resolve_warehouse` | Search warehouses by name or code |
+| `resolve_product` | Search products by name or артикул |
 | `sales_report` | Get sales with filters and grouping |
+| `stock_balance` | Get product stock balance as of a date |

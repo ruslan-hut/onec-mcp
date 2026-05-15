@@ -10,7 +10,9 @@ The Go service acts as a gateway and expects 1C to provide three HTTP endpoints:
 |----------|-------------|
 | `POST /mcp/resolve/customer` | Search customers |
 | `POST /mcp/resolve/warehouse` | Search warehouses |
+| `POST /mcp/resolve/product` | Search products |
 | `POST /mcp/reports/sales` | Generate sales report |
+| `POST /mcp/reports/stock` | Stock balance report |
 
 Base URL is configured via `onec.base_url` in config.
 
@@ -153,6 +155,57 @@ Content-Type: application/json
 
 ---
 
+## Endpoint: Resolve Product
+
+```
+POST {base_url}/mcp/resolve/product
+Content-Type: application/json
+```
+
+### Request
+
+```json
+{
+  "query": "gel polish",
+  "limit": 10
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `query` | string | Search query (product name or артикул) |
+| `limit` | integer | Maximum results to return |
+
+### Response
+
+```json
+{
+  "candidates": [
+    {
+      "id": "p1q2r3s4-5678-90ab-cdef-123456789012",
+      "label": "Gel polish No.42",
+      "code": "GP-042",
+      "archived": false
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `candidates` | array | Yes | List of matching products |
+| `candidates[].id` | string | Yes | Product GUID |
+| `candidates[].label` | string | Yes | Human-readable name |
+| `candidates[].code` | string | No | Артикул (product code) |
+| `candidates[].archived` | boolean | No | Whether product is archived |
+
+### Notes
+
+- Если `query` похож на UUID и соответствует существующему товару — возвращается один кандидат с этим UUID, без полнотекстового поиска.
+- Товары с пометкой `ДляПроизводства` исключаются на стороне 1С (внутренние/производственные позиции).
+
+---
+
 ## Endpoint: Sales Report
 
 ```
@@ -247,6 +300,58 @@ Content-Type: application/json
 - If `measures` is empty, include all available measures
 - Apply `top` limit after sorting
 - `totals` should contain sums for numeric measures
+
+---
+
+## Endpoint: Stock Report
+
+```
+POST {base_url}/mcp/reports/stock
+Content-Type: application/json
+```
+
+### Request
+
+```json
+{
+  "date": "2025-12-31",
+  "filters": {
+    "product_ids": ["p1q2r3s4-5678-90ab-cdef-123456789012"],
+    "warehouse_ids": ["a1b2c3d4-5678-90ab-cdef-123456789012"]
+  },
+  "group_by": ["warehouse", "product"],
+  "measures": ["qty", "amount"],
+  "top": 100,
+  "sort": [
+    {"field": "qty", "dir": "desc"}
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment on the 1C side. |
+| `filters.product_ids` | array | No | Filter by product GUIDs |
+| `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
+| `group_by` | array | No | Grouping dimensions |
+| `measures` | array | No | Measures to calculate |
+| `top` | integer | No | Max rows to return |
+| `sort` | array | No | Sort specification |
+
+### Supported Values
+
+**group_by:** `warehouse`, `product`
+**measures:** `qty` (Количество), `amount` (Сумма)
+
+### Response
+
+Same shape as Sales Report — `{columns, rows, totals}`.
+
+### Notes
+
+- Items with the `ДляПроизводства` flag (both `Товар` and `Склад`) are excluded on the 1C side regardless of filters.
+- Default group_by is both `warehouse` and `product`; default measure is `qty` only.
+- Resource fields map to virtual table balance fields: `qty` → `КоличествоBalance`, `amount` → `СуммаBalance`.
 
 ---
 

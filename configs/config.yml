@@ -22,3 +22,26 @@ mcp:
 
 api:
   bearer_token: "your-api-token"
+
+# OAuth 2.1 AS+RS встроенный в гейт. Включай при подключении к Claude/ChatGPT как custom connector.
+# При enabled=true /mcp защищается OAuth Bearer (статический mcp.bearer_token игнорируется).
+oauth:
+  enabled: false
+  public_url: "https://mcp.example.com"        # внешний URL гейта без trailing slash
+  resource: ""                                  # пусто = public_url + "/mcp"
+  db_path: "data/oauth.db"
+  access_token_ttl: "1h"
+  refresh_token_ttl: "720h"
+  auth_code_ttl: "10m"
+  default_scopes:
+    - "mcp:resolve"
+    - "mcp:report:sales"
+    - "mcp:report:stock"
+  # Временный единый ключ для login-формы на этапе 1.
+  # На этапе 2 заменится на вызов 1С /mcp/auth/verify с per-user ключами.
+  dev_access_key: ""
+  # Per-IP лимиты на минуту, 0 = отключено. Защита от brute-force ключей.
+  rate_limit:
+    authorize_per_minute: 10
+    register_per_minute: 30
+    token_per_minute: 120

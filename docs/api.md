@@ -133,6 +133,52 @@ Content-Type: application/json
 
 ---
 
+### Resolve Product
+
+Search products by name or артикул (code) for disambiguation. Passing a UUID directly returns that product without searching.
+
+```
+POST /resolve/product
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "query": "gel polish",
+  "limit": 10
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | Yes | Search query (product name or артикул) |
+| `limit` | integer | No | Max results (default: 10, max: `limits.resolve_limit`) |
+
+**Response:**
+```json
+{
+  "candidates": [
+    {
+      "id": "P-GUID-1",
+      "label": "Gel polish No.42",
+      "code": "GP-042",
+      "archived": false
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `candidates` | array | List of matching products |
+| `candidates[].id` | string | Product GUID |
+| `candidates[].label` | string | Human-readable name |
+| `candidates[].code` | string | Артикул (optional) |
+| `candidates[].archived` | boolean | Archive status |
+
+---
+
 ### Sales Report
 
 Get sales report with filters, grouping, and sorting.
@@ -198,6 +244,44 @@ Content-Type: application/json
 | `columns[].type` | string | Column type: `ref`, `number`, `string` |
 | `rows` | array | Data rows (values match column order) |
 | `totals` | object | Totals by measure (optional) |
+
+---
+
+### Stock Report
+
+Get product stock balance as of a given date with filters, grouping, and sorting.
+
+```
+POST /reports/stock
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "date": "2025-12-31",
+  "filters": {
+    "product_ids": ["P-GUID-1"],
+    "warehouse_ids": ["W-GUID-1"]
+  },
+  "group_by": ["warehouse", "product"],
+  "measures": ["qty"],
+  "top": 50,
+  "sort": [{"field": "qty", "dir": "desc"}]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
+| `filters.product_ids` | array | No | Filter by product GUIDs |
+| `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
+| `group_by` | array | No | Grouping: `warehouse`, `product` (default: both) |
+| `measures` | array | No | Measures: `qty`, `amount` (default: `qty`) |
+| `top` | integer | No | Limit rows (max: `limits.max_rows`) |
+| `sort` | array | No | Sort order (only fields from selected group_by/measures are honored) |
+
+**Response:** same shape as `/reports/sales` — `columns`, `rows`, `totals`.
 
 ---
 
@@ -272,8 +356,18 @@ Get available tools and their JSON schemas.
         "inputSchema": { ... }
       },
       {
+        "name": "resolve_product",
+        "description": "Search products by name or артикул...",
+        "inputSchema": { ... }
+      },
+      {
         "name": "sales_report",
         "description": "Get sales report for a specified period...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "stock_balance",
+        "description": "Get product stock balance as of a given date...",
         "inputSchema": { ... }
       }
     ]
@@ -360,7 +454,7 @@ Execute a tool with arguments.
 | 400 | `invalid_request` | Failed to parse request body |
 | 400 | `validation_error` | Missing required fields or invalid values |
 | 400 | `limit_exceeded` | Result exceeds max_rows limit |
-| 502 | `onec_error` | 1C backend request failed |
+| 400 / 401 / 502 | `onec_error` | 1C backend request failed — status is taken from 1C (400/401), otherwise 502. The `message` field mirrors 1C's `message` when the body is a structured `{error, message}` JSON. |
 
 ### JSON-RPC Errors
 

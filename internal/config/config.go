@@ -12,6 +12,32 @@ type Config struct {
 	Limits LimitsConfig `yaml:"limits"`
 	MCP    MCPConfig    `yaml:"mcp"`
 	API    APIConfig    `yaml:"api"`
+	OAuth  OAuthConfig  `yaml:"oauth"`
+}
+
+// OAuthConfig — настройки встроенного Authorization+Resource Server.
+// Включается через oauth.enabled=true; при включении статический Bearer на /mcp отключается.
+type OAuthConfig struct {
+	Enabled         bool             `yaml:"enabled" env-default:"false"`
+	PublicURL       string           `yaml:"public_url"`
+	Resource        string           `yaml:"resource"`
+	DBPath          string           `yaml:"db_path" env-default:"data/oauth.db"`
+	AccessTokenTTL  time.Duration    `yaml:"access_token_ttl" env-default:"1h"`
+	RefreshTokenTTL time.Duration    `yaml:"refresh_token_ttl" env-default:"720h"`
+	AuthCodeTTL     time.Duration    `yaml:"auth_code_ttl" env-default:"10m"`
+	DefaultScopes   []string         `yaml:"default_scopes"`
+	RateLimit       RateLimitsConfig `yaml:"rate_limit"`
+	// DevAccessKey — временный единый ключ для проверки логина на этапе 1.
+	// На этапе 2 заменяется на вызов 1С /mcp/auth/verify.
+	DevAccessKey string `yaml:"dev_access_key"`
+}
+
+// RateLimitsConfig — пер-IP лимиты на чувствительные OAuth-эндпоинты.
+// 0 = эндпоинт без ограничения. Окно — одна минута (фиксированное).
+type RateLimitsConfig struct {
+	AuthorizePerMinute int `yaml:"authorize_per_minute" env-default:"10"`
+	RegisterPerMinute  int `yaml:"register_per_minute" env-default:"30"`
+	TokenPerMinute     int `yaml:"token_per_minute" env-default:"120"`
 }
 
 type MCPConfig struct {

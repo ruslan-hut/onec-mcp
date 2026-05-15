@@ -28,6 +28,17 @@ type ResolveWarehouseResponse struct {
 	Candidates []WarehouseCandidate `json:"candidates"`
 }
 
+type ProductCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Code     string `json:"code,omitempty"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveProductResponse struct {
+	Candidates []ProductCandidate `json:"candidates"`
+}
+
 type Period struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -58,6 +69,26 @@ type Column struct {
 }
 
 type SalesReportResponse struct {
+	Columns []Column               `json:"columns"`
+	Rows    [][]interface{}        `json:"rows"`
+	Totals  map[string]interface{} `json:"totals,omitempty"`
+}
+
+type StockFilters struct {
+	ProductIDs   []string `json:"product_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+}
+
+type StockReportRequest struct {
+	Date     string       `json:"date,omitempty"`
+	Filters  StockFilters `json:"filters,omitempty"`
+	GroupBy  []string     `json:"group_by,omitempty"`
+	Measures []string     `json:"measures,omitempty"`
+	Top      int          `json:"top,omitempty"`
+	Sort     []SortSpec   `json:"sort,omitempty"`
+}
+
+type StockReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`

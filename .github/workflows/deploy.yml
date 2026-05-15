@@ -35,6 +35,18 @@ jobs:
           ONEC_DEFAULT_TENANT: ${{ secrets.ONEC_DEFAULT_TENANT }}
           MCP_BEARER_TOKEN: ${{ secrets.MCP_BEARER_TOKEN }}
           API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
+          # OAuth — задайте OAUTH_PUBLIC_URL чтобы включить OAuth-режим (Custom Connector в Claude/ChatGPT).
+          # Остальные секреты опциональны: TTL/rate-limit имеют дефолты, переопределяются только при необходимости.
+          OAUTH_PUBLIC_URL: ${{ secrets.OAUTH_PUBLIC_URL }}
+          OAUTH_RESOURCE: ${{ secrets.OAUTH_RESOURCE }}
+          OAUTH_DB_PATH: ${{ secrets.OAUTH_DB_PATH }}
+          OAUTH_ACCESS_TOKEN_TTL: ${{ secrets.OAUTH_ACCESS_TOKEN_TTL }}
+          OAUTH_REFRESH_TOKEN_TTL: ${{ secrets.OAUTH_REFRESH_TOKEN_TTL }}
+          OAUTH_AUTH_CODE_TTL: ${{ secrets.OAUTH_AUTH_CODE_TTL }}
+          OAUTH_DEV_ACCESS_KEY: ${{ secrets.OAUTH_DEV_ACCESS_KEY }}
+          OAUTH_RL_AUTHORIZE: ${{ secrets.OAUTH_RL_AUTHORIZE }}
+          OAUTH_RL_REGISTER: ${{ secrets.OAUTH_RL_REGISTER }}
+          OAUTH_RL_TOKEN: ${{ secrets.OAUTH_RL_TOKEN }}
         run: |
           cat > onec-mcp.yml << 'EOF'
           server:
@@ -61,6 +73,24 @@ jobs:
 
           api:
             bearer_token: ""
+
+          oauth:
+            enabled: false
+            public_url: ""
+            resource: ""
+            db_path: "/var/lib/onec-mcp/oauth.db"
+            access_token_ttl: "1h"
+            refresh_token_ttl: "720h"
+            auth_code_ttl: "10m"
+            default_scopes:
+              - "mcp:resolve"
+              - "mcp:report:sales"
+              - "mcp:report:stock"
+            dev_access_key: ""
+            rate_limit:
+              authorize_per_minute: 10
+              register_per_minute: 30
+              token_per_minute: 120
           EOF
 
           yq -i ".onec.base_url = strenv(ONEC_BASE_URL)" onec-mcp.yml
@@ -71,6 +101,23 @@ jobs:
           yq -i ".onec.default_tenant = strenv(ONEC_DEFAULT_TENANT)" onec-mcp.yml
           yq -i ".mcp.bearer_token = strenv(MCP_BEARER_TOKEN)" onec-mcp.yml
           yq -i ".api.bearer_token = strenv(API_BEARER_TOKEN)" onec-mcp.yml
+
+          # OAuth включается автоматически при заданном OAUTH_PUBLIC_URL.
+          # Без него гейт остаётся в легаси-режиме со статическим MCP_BEARER_TOKEN.
+          if [ -n "$OAUTH_PUBLIC_URL" ]; then
+            yq -i ".oauth.enabled = true" onec-mcp.yml
+            yq -i ".oauth.public_url = strenv(OAUTH_PUBLIC_URL)" onec-mcp.yml
+          fi
+          [ -n "$OAUTH_RESOURCE" ]          && yq -i ".oauth.resource = strenv(OAUTH_RESOURCE)" onec-mcp.yml
+          [ -n "$OAUTH_DB_PATH" ]           && yq -i ".oauth.db_path = strenv(OAUTH_DB_PATH)" onec-mcp.yml
+          [ -n "$OAUTH_ACCESS_TOKEN_TTL" ]  && yq -i ".oauth.access_token_ttl = strenv(OAUTH_ACCESS_TOKEN_TTL)" onec-mcp.yml
+          [ -n "$OAUTH_REFRESH_TOKEN_TTL" ] && yq -i ".oauth.refresh_token_ttl = strenv(OAUTH_REFRESH_TOKEN_TTL)" onec-mcp.yml
+          [ -n "$OAUTH_AUTH_CODE_TTL" ]     && yq -i ".oauth.auth_code_ttl = strenv(OAUTH_AUTH_CODE_TTL)" onec-mcp.yml
+          [ -n "$OAUTH_DEV_ACCESS_KEY" ]    && yq -i ".oauth.dev_access_key = strenv(OAUTH_DEV_ACCESS_KEY)" onec-mcp.yml
+          # rate-limit — числа, env() парсит автоматически (в отличие от strenv())
+          [ -n "$OAUTH_RL_AUTHORIZE" ] && yq -i ".oauth.rate_limit.authorize_per_minute = env(OAUTH_RL_AUTHORIZE)" onec-mcp.yml
+          [ -n "$OAUTH_RL_REGISTER" ]  && yq -i ".oauth.rate_limit.register_per_minute  = env(OAUTH_RL_REGISTER)"  onec-mcp.yml
+          [ -n "$OAUTH_RL_TOKEN" ]     && yq -i ".oauth.rate_limit.token_per_minute     = env(OAUTH_RL_TOKEN)"     onec-mcp.yml
 
       - name: Copy files to server
         uses: appleboy/scp-action@v0.1.7
@@ -91,6 +138,10 @@ jobs:
           script: |
             sudo mkdir -p /etc/conf
             sudo mkdir -p /opt/onec-mcp
+            # Постоянный каталог для SQLite OAuth-хранилища. Содержит клиентов и активные токены —
+            # сохраняется между деплоями, чтобы пользователи не пере-логинивались каждый раз.
+            sudo mkdir -p /var/lib/onec-mcp
+            sudo chmod 700 /var/lib/onec-mcp
 
             sudo systemctl stop onec-mcp || true
 
