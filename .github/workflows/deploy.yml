@@ -48,7 +48,11 @@ jobs:
           OAUTH_RL_REGISTER: ${{ secrets.OAUTH_RL_REGISTER }}
           OAUTH_RL_TOKEN: ${{ secrets.OAUTH_RL_TOKEN }}
         run: |
-          cat > onec-mcp.yml << 'EOF'
+          set -x
+          which yq
+          yq --version
+
+          cat > onec-mcp.yml <<'EOF'
           server:
             host: 127.0.0.1
             port: 8088
@@ -104,20 +108,43 @@ jobs:
 
           # OAuth включается автоматически при заданном OAUTH_PUBLIC_URL.
           # Без него гейт остаётся в легаси-режиме со статическим MCP_BEARER_TOKEN.
-          if [ -n "$OAUTH_PUBLIC_URL" ]; then
+          # Все блоки — явные if/then/fi, чтобы set -e не споткнулся о пустые && chains.
+          if [ -n "${OAUTH_PUBLIC_URL:-}" ]; then
             yq -i ".oauth.enabled = true" onec-mcp.yml
             yq -i ".oauth.public_url = strenv(OAUTH_PUBLIC_URL)" onec-mcp.yml
           fi
-          [ -n "$OAUTH_RESOURCE" ]          && yq -i ".oauth.resource = strenv(OAUTH_RESOURCE)" onec-mcp.yml
-          [ -n "$OAUTH_DB_PATH" ]           && yq -i ".oauth.db_path = strenv(OAUTH_DB_PATH)" onec-mcp.yml
-          [ -n "$OAUTH_ACCESS_TOKEN_TTL" ]  && yq -i ".oauth.access_token_ttl = strenv(OAUTH_ACCESS_TOKEN_TTL)" onec-mcp.yml
-          [ -n "$OAUTH_REFRESH_TOKEN_TTL" ] && yq -i ".oauth.refresh_token_ttl = strenv(OAUTH_REFRESH_TOKEN_TTL)" onec-mcp.yml
-          [ -n "$OAUTH_AUTH_CODE_TTL" ]     && yq -i ".oauth.auth_code_ttl = strenv(OAUTH_AUTH_CODE_TTL)" onec-mcp.yml
-          [ -n "$OAUTH_DEV_ACCESS_KEY" ]    && yq -i ".oauth.dev_access_key = strenv(OAUTH_DEV_ACCESS_KEY)" onec-mcp.yml
-          # rate-limit — числа, env() парсит автоматически (в отличие от strenv())
-          [ -n "$OAUTH_RL_AUTHORIZE" ] && yq -i ".oauth.rate_limit.authorize_per_minute = env(OAUTH_RL_AUTHORIZE)" onec-mcp.yml
-          [ -n "$OAUTH_RL_REGISTER" ]  && yq -i ".oauth.rate_limit.register_per_minute  = env(OAUTH_RL_REGISTER)"  onec-mcp.yml
-          [ -n "$OAUTH_RL_TOKEN" ]     && yq -i ".oauth.rate_limit.token_per_minute     = env(OAUTH_RL_TOKEN)"     onec-mcp.yml
+          if [ -n "${OAUTH_RESOURCE:-}" ]; then
+            yq -i ".oauth.resource = strenv(OAUTH_RESOURCE)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_DB_PATH:-}" ]; then
+            yq -i ".oauth.db_path = strenv(OAUTH_DB_PATH)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_ACCESS_TOKEN_TTL:-}" ]; then
+            yq -i ".oauth.access_token_ttl = strenv(OAUTH_ACCESS_TOKEN_TTL)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_REFRESH_TOKEN_TTL:-}" ]; then
+            yq -i ".oauth.refresh_token_ttl = strenv(OAUTH_REFRESH_TOKEN_TTL)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_AUTH_CODE_TTL:-}" ]; then
+            yq -i ".oauth.auth_code_ttl = strenv(OAUTH_AUTH_CODE_TTL)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_DEV_ACCESS_KEY:-}" ]; then
+            yq -i ".oauth.dev_access_key = strenv(OAUTH_DEV_ACCESS_KEY)" onec-mcp.yml
+          fi
+          # rate-limit — числа, env() в yq парсит значение в int
+          if [ -n "${OAUTH_RL_AUTHORIZE:-}" ]; then
+            yq -i ".oauth.rate_limit.authorize_per_minute = env(OAUTH_RL_AUTHORIZE)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_RL_REGISTER:-}" ]; then
+            yq -i ".oauth.rate_limit.register_per_minute = env(OAUTH_RL_REGISTER)" onec-mcp.yml
+          fi
+          if [ -n "${OAUTH_RL_TOKEN:-}" ]; then
+            yq -i ".oauth.rate_limit.token_per_minute = env(OAUTH_RL_TOKEN)" onec-mcp.yml
+          fi
+
+          echo "=== generated config ==="
+          # Скрываем секреты в логе — печатаем структуру без значений строковых полей
+          yq '(.. | select(tag == "!!str")) = "***"' onec-mcp.yml
 
       - name: Copy files to server
         uses: appleboy/scp-action@v0.1.7
