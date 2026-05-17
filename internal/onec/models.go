@@ -112,6 +112,19 @@ type StockReportResponse struct {
 	Totals  map[string]interface{} `json:"totals,omitempty"`
 }
 
+type TopProductsRequest struct {
+	Period  Period       `json:"period"`
+	Filters SalesFilters `json:"filters,omitempty"`
+	By      string       `json:"by,omitempty"`
+	Top     int          `json:"top,omitempty"`
+}
+
+type CustomerSummaryRequest struct {
+	CustomerID  string `json:"customer_id"`
+	Period      Period `json:"period"`
+	TopProducts int    `json:"top_products,omitempty"`
+}
+
 // AuthVerifyRequest — тело POST /mcp/auth/verify к 1С.
 type AuthVerifyRequest struct {
 	Key string `json:"key"`
