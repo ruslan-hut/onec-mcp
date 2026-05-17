@@ -77,7 +77,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by both warehouse and customer and returns both amount and qty. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Dimensions: warehouse, customer, product, day, month (day/month return ISO date strings 'YYYY-MM-DD'). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -116,13 +116,13 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"customer", "warehouse"}},
-						"description": "Group results by dimensions",
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "day", "month"}},
+						"description": "Group results by dimensions. day/month bucket by document date.",
 					},
 					"measures": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty"}},
-						"description": "Measures to include (default: amount, qty)",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check"}},
+						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts.",
 					},
 					"top": map[string]any{
 						"type":        "integer",
