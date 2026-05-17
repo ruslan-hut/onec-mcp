@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"example.com/mcp-sales-mvp/internal/config"
+	"example.com/mcp-sales-mvp/internal/oauth"
 )
 
 type Client struct {
@@ -69,6 +71,15 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.SetBasicAuth(c.username, c.password)
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+c.password)
+	}
+
+	// Прокидываем sub/scopes резолвнутого пользователя в 1С (defense in depth).
+	// 1С использует X-MCP-Scopes для per-endpoint ACL — даже при компрометации гейта
+	// ключ с mcp:resolve не сможет вызвать report endpoints.
+	if auth := oauth.FromContext(ctx); auth != nil {
+		req.Header.Set("X-MCP-Sub", auth.Sub)
+		// Comma-separated, чтобы парсинг в 1С был прямолинейным (см. RequireScope в HTTPServices/MCP).
+		req.Header.Set("X-MCP-Scopes", strings.Join(auth.Scopes, ","))
 	}
 
 	start := time.Now()
