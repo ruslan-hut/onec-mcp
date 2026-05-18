@@ -65,6 +65,10 @@ type Period struct {
 type SalesFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// CustomerCohort ограничивает выборку «новыми» или «повторными» контрагентами.
+	// «Новый» = ДатаСоздания контрагента >= начало месяца, предшествующего PeriodBegin.
+	// Допустимо: "new" | "returning". Пустая строка / отсутствие = без фильтра.
+	CustomerCohort string `json:"customer_cohort,omitempty"`
 }
 
 type SortSpec struct {

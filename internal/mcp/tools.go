@@ -81,7 +81,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Dimensions: warehouse, customer, product, seller, sales_channel, day, week, month (day/week/month return ISO date strings 'YYYY-MM-DD'). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts). Reference cells in rows come back as {id,label} objects (id is the catalog UUID, label is the human-readable name) — no extra resolve call needed to display. Response also includes period {from,to} and applied_filters with resolved entity labels. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Dimensions: warehouse, customer, product, seller, sales_channel, day, week, month, cohort (cohort = 'new' or 'returning' based on customer creation date; day/week/month return ISO date strings 'YYYY-MM-DD'). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer). Filter customer_cohort='new'|'returning' restricts the sample to new vs returning customers (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side, group_by=['cohort']. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (including new_since boundary date). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -116,17 +116,22 @@ func GetTools() []Tool {
 								"items":       map[string]any{"type": "string"},
 								"description": "Filter by warehouse IDs (from resolve_warehouse)",
 							},
+							"customer_cohort": map[string]any{
+								"type":        "string",
+								"enum":        []string{"new", "returning"},
+								"description": "Restrict to new (customer created within or after the calendar month preceding period start) or returning customers. Omit to include both.",
+							},
 						},
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "seller", "sales_channel", "day", "week", "month"}},
-						"description": "Group results by dimensions. day/week/month bucket by document date.",
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "seller", "sales_channel", "day", "week", "month", "cohort"}},
+						"description": "Group results by dimensions. day/week/month bucket by document date. cohort splits rows into 'new' vs 'returning' customers.",
 					},
 					"measures": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check"}},
-						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts.",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check", "customers"}},
+						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts, customers = COUNT(DISTINCT customer).",
 					},
 					"top": map[string]any{
 						"type":        "integer",
