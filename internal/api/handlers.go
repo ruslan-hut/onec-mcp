@@ -5,10 +5,23 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strings"
 
 	"example.com/mcp-sales-mvp/internal/config"
 	"example.com/mcp-sales-mvp/internal/onec"
 )
+
+// sortedKeys возвращает ключи булевой карты в стабильном порядке — для предсказуемых
+// сообщений об ошибках без вечной рассинхронизации с самой картой.
+func sortedKeys(m map[string]bool) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
 
 type Handler struct {
 	onecClient *onec.Client
@@ -181,11 +194,22 @@ func (h *Handler) ResolveProduct(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, apiResp)
 }
 
-var validMeasures = map[string]bool{"amount": true, "qty": true}
-var validGroupBy = map[string]bool{"customer": true, "warehouse": true}
+// Whitelist'ы должны соответствовать AllowedDims/AllowedMeasures в CommonModule.MCP (1С).
+// При расширении схемы инструментов — синхронизировать здесь, иначе REST-зеркало вернёт 400
+// раньше, чем запрос дойдёт до 1С (которая молча игнорирует неизвестные значения).
+var validMeasures = map[string]bool{
+	"amount": true, "qty": true, "receipts": true, "avg_check": true, "customers": true,
+}
+var validGroupBy = map[string]bool{
+	"customer": true, "warehouse": true, "product": true, "seller": true, "sales_channel": true,
+	"day": true, "week": true, "month": true, "cohort": true,
+	"product_group": true, "customer_group": true,
+}
 
 var validStockMeasures = map[string]bool{"qty": true, "amount": true}
-var validStockGroupBy = map[string]bool{"warehouse": true, "product": true}
+var validStockGroupBy = map[string]bool{
+	"warehouse": true, "product": true, "product_group": true,
+}
 
 func (h *Handler) SalesReport(w http.ResponseWriter, r *http.Request) {
 	var req SalesReportRequest
@@ -201,14 +225,14 @@ func (h *Handler) SalesReport(w http.ResponseWriter, r *http.Request) {
 
 	for _, m := range req.Measures {
 		if !validMeasures[m] {
-			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid measure: "+m+". Supported: amount, qty")
+			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid measure: "+m+". Supported: "+sortedKeys(validMeasures))
 			return
 		}
 	}
 
 	for _, g := range req.GroupBy {
 		if !validGroupBy[g] {
-			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid group_by: "+g+". Supported: customer, warehouse")
+			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid group_by: "+g+". Supported: "+sortedKeys(validGroupBy))
 			return
 		}
 	}
@@ -275,14 +299,14 @@ func (h *Handler) StockReport(w http.ResponseWriter, r *http.Request) {
 
 	for _, m := range req.Measures {
 		if !validStockMeasures[m] {
-			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid measure: "+m+". Supported: qty, amount")
+			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid measure: "+m+". Supported: "+sortedKeys(validStockMeasures))
 			return
 		}
 	}
 
 	for _, g := range req.GroupBy {
 		if !validStockGroupBy[g] {
-			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid group_by: "+g+". Supported: warehouse, product")
+			h.writeError(w, http.StatusBadRequest, "validation_error", "Invalid group_by: "+g+". Supported: "+sortedKeys(validStockGroupBy))
 			return
 		}
 	}
