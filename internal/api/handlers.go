@@ -80,7 +80,7 @@ func (h *Handler) ResolveCustomer(w http.ResponseWriter, r *http.Request) {
 		limit = h.cfg.Limits.ResolveLimit
 	}
 
-	resp, err := h.onecClient.ResolveCustomer(r.Context(), req.Query, limit)
+	resp, err := h.onecClient.ResolveCustomer(r.Context(), req.Query, limit, false)
 	if err != nil {
 		h.logger.Error("failed to resolve customer", "error", err, "query", req.Query)
 		h.writeOneCError(w, err, "Failed to resolve customer from 1C")
@@ -159,7 +159,7 @@ func (h *Handler) ResolveProduct(w http.ResponseWriter, r *http.Request) {
 		limit = h.cfg.Limits.ResolveLimit
 	}
 
-	resp, err := h.onecClient.ResolveProduct(r.Context(), req.Query, limit)
+	resp, err := h.onecClient.ResolveProduct(r.Context(), req.Query, limit, false)
 	if err != nil {
 		h.logger.Error("failed to resolve product", "error", err, "query", req.Query)
 		h.writeOneCError(w, err, "Failed to resolve product from 1C")
@@ -223,8 +223,9 @@ func (h *Handler) SalesReport(w http.ResponseWriter, r *http.Request) {
 			To:   req.Period.To,
 		},
 		Filters: onec.SalesFilters{
-			CustomerIDs:  req.Filters.CustomerIDs,
-			WarehouseIDs: req.Filters.WarehouseIDs,
+			CustomerIDs:     req.Filters.CustomerIDs,
+			WarehouseIDs:    req.Filters.WarehouseIDs,
+			SalesChannelIDs: req.Filters.SalesChannelIDs,
 		},
 		GroupBy:  req.GroupBy,
 		Measures: req.Measures,

@@ -45,8 +45,9 @@ type Period struct {
 }
 
 type SalesFilters struct {
-	CustomerIDs  []string `json:"customer_ids,omitempty"`
-	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	CustomerIDs     []string `json:"customer_ids,omitempty"`
+	WarehouseIDs    []string `json:"warehouse_ids,omitempty"`
+	SalesChannelIDs []string `json:"sales_channel_ids,omitempty"`
 }
 
 type SortSpec struct {

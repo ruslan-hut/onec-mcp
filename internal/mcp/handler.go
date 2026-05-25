@@ -164,6 +164,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callResolveWarehouse(r, params.Arguments)
 	case ToolResolveProduct:
 		result, err = h.callResolveProduct(r, params.Arguments)
+	case ToolResolveSalesChannel:
+		result, err = h.callResolveSalesChannel(r, params.Arguments)
 	case ToolSalesReport:
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
@@ -216,8 +218,9 @@ func authIdentity(auth *oauth.AuthInfo) (sub, clientID string) {
 }
 
 type resolveArgs struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
+	Query         string `json:"query"`
+	Limit         int    `json:"limit"`
+	IncludeGroups bool   `json:"include_groups"`
 }
 
 func (h *Handler) callResolveCustomer(r *http.Request, args any) (*CallToolResult, error) {
@@ -231,7 +234,7 @@ func (h *Handler) callResolveCustomer(r *http.Request, args any) (*CallToolResul
 		limit = h.cfg.Limits.ResolveLimit
 	}
 
-	resp, err := h.onecClient.ResolveCustomer(r.Context(), a.Query, limit)
+	resp, err := h.onecClient.ResolveCustomer(r.Context(), a.Query, limit, a.IncludeGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +286,33 @@ func (h *Handler) callResolveProduct(r *http.Request, args any) (*CallToolResult
 		limit = h.cfg.Limits.ResolveLimit
 	}
 
-	resp, err := h.onecClient.ResolveProduct(r.Context(), a.Query, limit)
+	resp, err := h.onecClient.ResolveProduct(r.Context(), a.Query, limit, a.IncludeGroups)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+func (h *Handler) callResolveSalesChannel(r *http.Request, args any) (*CallToolResult, error) {
+	var a resolveArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	limit := a.Limit
+	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
+		limit = h.cfg.Limits.ResolveLimit
+	}
+
+	resp, err := h.onecClient.ResolveSalesChannel(r.Context(), a.Query, limit)
 	if err != nil {
 		return nil, err
 	}

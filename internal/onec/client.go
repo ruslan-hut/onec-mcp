@@ -127,22 +127,26 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	return nil
 }
 
-func (c *Client) ResolveCustomer(ctx context.Context, query string, limit int) (*ResolveCustomerResponse, error) {
-	if cached, ok := c.resolveCache.Get("customer", query, limit); ok {
+func (c *Client) ResolveCustomer(ctx context.Context, query string, limit int, includeGroups bool) (*ResolveCustomerResponse, error) {
+	cacheKey := "customer"
+	if includeGroups {
+		cacheKey = "customer+groups"
+	}
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
 		var resp ResolveCustomerResponse
 		if err := json.Unmarshal(cached, &resp); err == nil {
 			return &resp, nil
 		}
 	}
 
-	req := ResolveRequest{Query: query, Limit: limit}
+	req := ResolveRequest{Query: query, Limit: limit, IncludeGroups: includeGroups}
 	var resp ResolveCustomerResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/customer", req, &resp); err != nil {
 		return nil, err
 	}
 
 	if payload, err := json.Marshal(&resp); err == nil {
-		c.resolveCache.Set("customer", query, limit, payload)
+		c.resolveCache.Set(cacheKey, query, limit, payload)
 	}
 	return &resp, nil
 }
@@ -167,22 +171,46 @@ func (c *Client) ResolveWarehouse(ctx context.Context, query string, limit int) 
 	return &resp, nil
 }
 
-func (c *Client) ResolveProduct(ctx context.Context, query string, limit int) (*ResolveProductResponse, error) {
-	if cached, ok := c.resolveCache.Get("product", query, limit); ok {
+func (c *Client) ResolveProduct(ctx context.Context, query string, limit int, includeGroups bool) (*ResolveProductResponse, error) {
+	cacheKey := "product"
+	if includeGroups {
+		cacheKey = "product+groups"
+	}
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
 		var resp ResolveProductResponse
 		if err := json.Unmarshal(cached, &resp); err == nil {
 			return &resp, nil
 		}
 	}
 
-	req := ResolveRequest{Query: query, Limit: limit}
+	req := ResolveRequest{Query: query, Limit: limit, IncludeGroups: includeGroups}
 	var resp ResolveProductResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/product", req, &resp); err != nil {
 		return nil, err
 	}
 
 	if payload, err := json.Marshal(&resp); err == nil {
-		c.resolveCache.Set("product", query, limit, payload)
+		c.resolveCache.Set(cacheKey, query, limit, payload)
+	}
+	return &resp, nil
+}
+
+func (c *Client) ResolveSalesChannel(ctx context.Context, query string, limit int) (*ResolveSalesChannelResponse, error) {
+	if cached, ok := c.resolveCache.Get("sales_channel", query, limit); ok {
+		var resp ResolveSalesChannelResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit}
+	var resp ResolveSalesChannelResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/sales_channel", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("sales_channel", query, limit, payload)
 	}
 	return &resp, nil
 }
