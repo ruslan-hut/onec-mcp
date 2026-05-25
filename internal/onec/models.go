@@ -65,6 +65,10 @@ type Period struct {
 type SalesFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// CustomerCohort ограничивает выборку «новыми» или «повторными» контрагентами.
+	// «Новый» = ДатаСоздания контрагента >= начало месяца, предшествующего PeriodBegin.
+	// Допустимо: "new" | "returning". Пустая строка / отсутствие = без фильтра.
+	CustomerCohort string `json:"customer_cohort,omitempty"`
 }
 
 type SortSpec struct {
@@ -110,6 +114,19 @@ type StockReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+}
+
+type TopProductsRequest struct {
+	Period  Period       `json:"period"`
+	Filters SalesFilters `json:"filters,omitempty"`
+	By      string       `json:"by,omitempty"`
+	Top     int          `json:"top,omitempty"`
+}
+
+type CustomerSummaryRequest struct {
+	CustomerID  string `json:"customer_id"`
+	Period      Period `json:"period"`
+	TopProducts int    `json:"top_products,omitempty"`
 }
 
 // AuthVerifyRequest — тело POST /mcp/auth/verify к 1С.

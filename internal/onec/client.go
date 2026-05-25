@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"example.com/mcp-sales-mvp/internal/config"
+	"example.com/mcp-sales-mvp/internal/oauth"
 )
 
 type Client struct {
@@ -22,6 +24,7 @@ type Client struct {
 	tenantHeader  string
 	defaultTenant string
 	logger        *slog.Logger
+	resolveCache  *resolveCache
 }
 
 func NewClient(cfg *config.OneCConfig, logger *slog.Logger) *Client {
@@ -36,6 +39,7 @@ func NewClient(cfg *config.OneCConfig, logger *slog.Logger) *Client {
 		tenantHeader:  cfg.TenantHeader,
 		defaultTenant: cfg.DefaultTenant,
 		logger:        logger,
+		resolveCache:  newResolveCache(cfg.ResolveCacheTTL()),
 	}
 }
 
@@ -67,6 +71,15 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.SetBasicAuth(c.username, c.password)
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+c.password)
+	}
+
+	// Прокидываем sub/scopes резолвнутого пользователя в 1С (defense in depth).
+	// 1С использует X-MCP-Scopes для per-endpoint ACL — даже при компрометации гейта
+	// ключ с mcp:resolve не сможет вызвать report endpoints.
+	if auth := oauth.FromContext(ctx); auth != nil {
+		req.Header.Set("X-MCP-Sub", auth.Sub)
+		// Comma-separated, чтобы парсинг в 1С был прямолинейным (см. RequireScope в HTTPServices/MCP).
+		req.Header.Set("X-MCP-Scopes", strings.Join(auth.Scopes, ","))
 	}
 
 	start := time.Now()
@@ -115,44 +128,62 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 }
 
 func (c *Client) ResolveCustomer(ctx context.Context, query string, limit int) (*ResolveCustomerResponse, error) {
-	req := ResolveRequest{
-		Query: query,
-		Limit: limit,
+	if cached, ok := c.resolveCache.Get("customer", query, limit); ok {
+		var resp ResolveCustomerResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
 	}
 
+	req := ResolveRequest{Query: query, Limit: limit}
 	var resp ResolveCustomerResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/customer", req, &resp); err != nil {
 		return nil, err
 	}
 
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("customer", query, limit, payload)
+	}
 	return &resp, nil
 }
 
 func (c *Client) ResolveWarehouse(ctx context.Context, query string, limit int) (*ResolveWarehouseResponse, error) {
-	req := ResolveRequest{
-		Query: query,
-		Limit: limit,
+	if cached, ok := c.resolveCache.Get("warehouse", query, limit); ok {
+		var resp ResolveWarehouseResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
 	}
 
+	req := ResolveRequest{Query: query, Limit: limit}
 	var resp ResolveWarehouseResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/warehouse", req, &resp); err != nil {
 		return nil, err
 	}
 
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("warehouse", query, limit, payload)
+	}
 	return &resp, nil
 }
 
 func (c *Client) ResolveProduct(ctx context.Context, query string, limit int) (*ResolveProductResponse, error) {
-	req := ResolveRequest{
-		Query: query,
-		Limit: limit,
+	if cached, ok := c.resolveCache.Get("product", query, limit); ok {
+		var resp ResolveProductResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
 	}
 
+	req := ResolveRequest{Query: query, Limit: limit}
 	var resp ResolveProductResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/product", req, &resp); err != nil {
 		return nil, err
 	}
 
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("product", query, limit, payload)
+	}
 	return &resp, nil
 }
 
@@ -172,6 +203,25 @@ func (c *Client) StockReport(ctx context.Context, req *StockReportRequest) (*Sto
 	}
 
 	return &resp, nil
+}
+
+// TopProducts / CustomerSummary возвращаются как json.RawMessage —
+// гейту достаточно прокинуть тело наверх, без декомпозиции в типизированную структуру.
+// Это позволяет добавлять поля в 1С-стороне без правки гейта.
+func (c *Client) TopProducts(ctx context.Context, req *TopProductsRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/top_products", req, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *Client) CustomerSummary(ctx context.Context, req *CustomerSummaryRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/customer_summary", req, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // VerifyMCPKey проверяет MCP-ключ через 1С. Возвращает APIError со статусом 401, если ключ невалиден —

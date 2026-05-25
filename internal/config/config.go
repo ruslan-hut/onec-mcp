@@ -55,11 +55,12 @@ type ServerConfig struct {
 }
 
 type OneCConfig struct {
-	BaseURL       string     `yaml:"base_url"`
-	TimeoutMs     int        `yaml:"timeout_ms" env-default:"8000"`
-	Auth          AuthConfig `yaml:"auth"`
-	TenantHeader  string     `yaml:"tenant_header"`
-	DefaultTenant string     `yaml:"default_tenant"`
+	BaseURL            string     `yaml:"base_url"`
+	TimeoutMs          int        `yaml:"timeout_ms" env-default:"8000"`
+	Auth               AuthConfig `yaml:"auth"`
+	TenantHeader       string     `yaml:"tenant_header"`
+	DefaultTenant      string     `yaml:"default_tenant"`
+	ResolveCacheTTLSec int        `yaml:"resolve_cache_ttl_sec" env-default:"600"`
 }
 
 type AuthConfig struct {
@@ -75,6 +76,11 @@ type LimitsConfig struct {
 
 func (c *OneCConfig) Timeout() time.Duration {
 	return time.Duration(c.TimeoutMs) * time.Millisecond
+}
+
+// ResolveCacheTTL — TTL для кэша resolve_* ответов. 0 (или отрицательное) отключает кэш.
+func (c *OneCConfig) ResolveCacheTTL() time.Duration {
+	return time.Duration(c.ResolveCacheTTLSec) * time.Second
 }
 
 func Load(configPath string) (*Config, error) {

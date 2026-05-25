@@ -6,6 +6,8 @@ const (
 	ToolResolveProduct   = "resolve_product"
 	ToolSalesReport      = "sales_report"
 	ToolStockBalance     = "stock_balance"
+	ToolTopProducts      = "top_products"
+	ToolCustomerSummary  = "customer_summary"
 )
 
 // ToolScopes — обязательный scope для каждого MCP-инструмента.
@@ -17,6 +19,8 @@ var ToolScopes = map[string]string{
 	ToolResolveProduct:   "mcp:resolve",
 	ToolSalesReport:      "mcp:report:sales",
 	ToolStockBalance:     "mcp:report:stock",
+	ToolTopProducts:      "mcp:report:sales",
+	ToolCustomerSummary:  "mcp:report:sales",
 }
 
 func GetTools() []Tool {
@@ -77,7 +81,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by both warehouse and customer and returns both amount and qty. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored). Use product_group / customer_group to aggregate by parent group of the hierarchical catalog (товарная группа / группа контрагентов), useful for answering questions about totals per group rather than per item.",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Dimensions: warehouse, customer, product, seller, sales_channel, day, week, month, cohort, product_group, customer_group (cohort = 'new' or 'returning' based on customer creation date; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов — useful for totals per group rather than per item). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer). Filter customer_cohort='new'|'returning' restricts the sample to new vs returning customers (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side, group_by=['cohort']. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (including new_since boundary date). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -112,17 +116,22 @@ func GetTools() []Tool {
 								"items":       map[string]any{"type": "string"},
 								"description": "Filter by warehouse IDs (from resolve_warehouse)",
 							},
+							"customer_cohort": map[string]any{
+								"type":        "string",
+								"enum":        []string{"new", "returning"},
+								"description": "Restrict to new (customer created within or after the calendar month preceding period start) or returning customers. Omit to include both.",
+							},
 						},
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"customer", "warehouse", "product_group", "customer_group"}},
-						"description": "Group results by dimensions",
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "seller", "sales_channel", "day", "week", "month", "cohort", "product_group", "customer_group"}},
+						"description": "Group results by dimensions. day/week/month bucket by document date. cohort splits rows into 'new' vs 'returning' customers. product_group / customer_group aggregate by parent group of the hierarchical catalog.",
 					},
 					"measures": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty"}},
-						"description": "Measures to include (default: amount, qty)",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check", "customers"}},
+						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts, customers = COUNT(DISTINCT customer).",
 					},
 					"top": map[string]any{
 						"type":        "integer",
@@ -141,6 +150,69 @@ func GetTools() []Tool {
 					},
 				},
 				"required": []string{"period"},
+			},
+		},
+		{
+			Name:        ToolTopProducts,
+			Description: "Get top-N best-selling products for a period. Thin wrapper over sales_report grouped by product and sorted by the selected metric. Use this instead of sales_report when the user asks 'top products', 'bestsellers', 'what sold most' — the tool name is a strong hint for LLM tool selection.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Report period",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"customer_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific customers"},
+							"warehouse_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific warehouses"},
+						},
+					},
+					"by": map[string]any{
+						"type":        "string",
+						"enum":        []string{"amount", "qty"},
+						"description": "Ranking metric (default: amount)",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Number of products to return (default: 10)",
+					},
+				},
+				"required": []string{"period"},
+			},
+		},
+		{
+			Name:        ToolCustomerSummary,
+			Description: "Get a summary card for a single customer over a period: total amount, qty, number of receipts, average check, last purchase date, and top-N most bought products. Replaces 3-4 sequential sales_report calls with one. Use when the user asks about a specific customer (e.g. 'how much did X buy', 'tell me about customer Y').",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"customer_id": map[string]any{
+						"type":        "string",
+						"description": "Customer UUID (from resolve_customer)",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Period for the summary",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"top_products": map[string]any{
+						"type":        "integer",
+						"description": "How many top products to include (default: 5)",
+					},
+				},
+				"required": []string{"customer_id", "period"},
 			},
 		},
 		{

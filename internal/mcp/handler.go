@@ -168,6 +168,10 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
 		result, err = h.callStockBalance(r, params.Arguments)
+	case ToolTopProducts:
+		result, err = h.callTopProducts(r, params.Arguments)
+	case ToolCustomerSummary:
+		result, err = h.callCustomerSummary(r, params.Arguments)
 	default:
 		h.auditToolCall(auth, params.Name, false, "unknown_tool", started)
 		return InvalidParams(req.ID, "unknown tool: "+params.Name)
@@ -377,6 +381,72 @@ func (h *Handler) callStockBalance(r *http.Request, args any) (*CallToolResult, 
 
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+type topProductsArgs struct {
+	Period  onec.Period       `json:"period"`
+	Filters onec.SalesFilters `json:"filters"`
+	By      string            `json:"by"`
+	Top     int               `json:"top"`
+}
+
+func (h *Handler) callTopProducts(r *http.Request, args any) (*CallToolResult, error) {
+	var a topProductsArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
+		if a.Top <= 0 {
+			a.Top = 10
+		} else {
+			a.Top = h.cfg.Limits.MaxRows
+		}
+	}
+
+	req := &onec.TopProductsRequest{
+		Period:  a.Period,
+		Filters: a.Filters,
+		By:      a.By,
+		Top:     a.Top,
+	}
+
+	resp, err := h.onecClient.TopProducts(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type customerSummaryArgs struct {
+	CustomerID  string      `json:"customer_id"`
+	Period      onec.Period `json:"period"`
+	TopProducts int         `json:"top_products"`
+}
+
+func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResult, error) {
+	var a customerSummaryArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.CustomerSummaryRequest{
+		CustomerID:  a.CustomerID,
+		Period:      a.Period,
+		TopProducts: a.TopProducts,
+	}
+
+	resp, err := h.onecClient.CustomerSummary(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
 }
 
