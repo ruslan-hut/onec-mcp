@@ -77,7 +77,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by both warehouse and customer and returns both amount and qty. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by both warehouse and customer and returns both amount and qty. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored). Use product_group / customer_group to aggregate by parent group of the hierarchical catalog (товарная группа / группа контрагентов), useful for answering questions about totals per group rather than per item.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -116,7 +116,7 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"customer", "warehouse"}},
+						"items":       map[string]any{"type": "string", "enum": []string{"customer", "warehouse", "product_group", "customer_group"}},
 						"description": "Group results by dimensions",
 					},
 					"measures": map[string]any{
@@ -145,7 +145,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolStockBalance,
-			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures).",
+			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -172,7 +172,7 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product"}},
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product", "product_group"}},
 						"description": "Group results by dimensions",
 					},
 					"measures": map[string]any{
