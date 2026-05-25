@@ -197,6 +197,44 @@ func (h *Handler) ResolveProduct(w http.ResponseWriter, r *http.Request) {
 // Whitelist'ы должны соответствовать AllowedDims/AllowedMeasures в CommonModule.MCP (1С).
 // При расширении схемы инструментов — синхронизировать здесь, иначе REST-зеркало вернёт 400
 // раньше, чем запрос дойдёт до 1С (которая молча игнорирует неизвестные значения).
+func (h *Handler) ResolveSalesChannel(w http.ResponseWriter, r *http.Request) {
+	var req ResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "Failed to parse request body")
+		return
+	}
+
+	if req.Query == "" {
+		h.writeError(w, http.StatusBadRequest, "validation_error", "Query is required")
+		return
+	}
+
+	limit := req.Limit
+	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
+		limit = h.cfg.Limits.ResolveLimit
+	}
+
+	resp, err := h.onecClient.ResolveSalesChannel(r.Context(), req.Query, limit)
+	if err != nil {
+		h.logger.Error("failed to resolve sales channel", "error", err, "query", req.Query)
+		h.writeOneCError(w, err, "Failed to resolve sales channel from 1C")
+		return
+	}
+
+	apiResp := ResolveSalesChannelResponse{
+		Candidates: make([]SalesChannelCandidate, len(resp.Candidates)),
+	}
+	for i, c := range resp.Candidates {
+		apiResp.Candidates[i] = SalesChannelCandidate{
+			ID:       c.ID,
+			Label:    c.Label,
+			Archived: c.Archived,
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, apiResp)
+}
+
 var validMeasures = map[string]bool{
 	"amount": true, "qty": true, "receipts": true, "avg_check": true, "customers": true,
 }

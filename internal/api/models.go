@@ -39,6 +39,16 @@ type ResolveProductResponse struct {
 	Candidates []ProductCandidate `json:"candidates"`
 }
 
+type SalesChannelCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveSalesChannelResponse struct {
+	Candidates []SalesChannelCandidate `json:"candidates"`
+}
+
 type Period struct {
 	From string `json:"from"`
 	To   string `json:"to"`

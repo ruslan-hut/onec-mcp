@@ -52,6 +52,7 @@ func NewRouter(h *Handler, mcpHandler http.Handler, apiBearerToken string, oauth
 			r.Post("/resolve/customer", h.ResolveCustomer)
 			r.Post("/resolve/warehouse", h.ResolveWarehouse)
 			r.Post("/resolve/product", h.ResolveProduct)
+			r.Post("/resolve/sales_channel", h.ResolveSalesChannel)
 			r.Post("/reports/sales", h.SalesReport)
 			r.Post("/reports/stock", h.StockReport)
 		})
