@@ -116,6 +116,12 @@ func (h *Handler) handleToolsList(r *http.Request, req Request) *Response {
 			}
 		}
 		tools = filtered
+
+		// Measure-level ACL: без права mcp:report:cost убираем cost/profit/margin из enum мер
+		// sales_report, чтобы LLM их даже не предлагал. Финальная защита — на стороне 1С.
+		if !auth.HasScope(ScopeReportCost) {
+			stripCostMeasures(tools)
+		}
 	}
 
 	sub, cid := authIdentity(auth)
@@ -477,6 +483,51 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
+}
+
+// stripCostMeasures удаляет cost/profit/margin из enum мер инструмента sales_report.
+// Вызывается для пользователей без права mcp:report:cost. Мутирует вложенные map'ы схемы;
+// это безопасно, т.к. GetTools() конструирует свежие map'ы на каждый запрос.
+func stripCostMeasures(tools []Tool) {
+	blocked := make(map[string]bool, len(CostMeasures))
+	for _, m := range CostMeasures {
+		blocked[m] = true
+	}
+
+	for _, t := range tools {
+		if t.Name != ToolSalesReport {
+			continue
+		}
+
+		schema, ok := t.InputSchema.(map[string]any)
+		if !ok {
+			continue
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		measures, ok := props["measures"].(map[string]any)
+		if !ok {
+			continue
+		}
+		items, ok := measures["items"].(map[string]any)
+		if !ok {
+			continue
+		}
+		enum, ok := items["enum"].([]string)
+		if !ok {
+			continue
+		}
+
+		filtered := enum[:0:0]
+		for _, e := range enum {
+			if !blocked[e] {
+				filtered = append(filtered, e)
+			}
+		}
+		items["enum"] = filtered
+	}
 }
 
 func mapToStruct(m any, v any) error {

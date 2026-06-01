@@ -11,6 +11,16 @@ const (
 	ToolResolveSalesChannel = "resolve_sales_channel"
 )
 
+// ScopeReportCost — measure-level scope: доступ к закупочной стоимости / прибыли / марже
+// в sales_report. Не привязан к отдельному инструменту (это меры внутри sales_report),
+// поэтому отсутствует в ToolScopes; проверяется при фильтрации схемы в handleToolsList,
+// а финально — на стороне 1С по заголовку X-MCP-Scopes (defense in depth).
+const ScopeReportCost = "mcp:report:cost"
+
+// CostMeasures — меры sales_report, закрытые правом ScopeReportCost. Должны быть синхронны
+// с белым списком мер в CommonModules/MCP (BSL) и со значениями enum в схеме sales_report.
+var CostMeasures = []string{"cost", "profit", "margin"}
+
 // ToolScopes — обязательный scope для каждого MCP-инструмента.
 // Проверяется в handleToolsCall и используется для фильтрации tools/list по правам пользователя.
 // При добавлении нового инструмента — обязательно прописать его сюда, иначе вызов будет отказан.
@@ -109,7 +119,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), warehouse_ids, sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, warehouses, sales_channels, customer_cohort, new_since). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), warehouse_ids, sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer), and — for users with the mcp:report:cost permission — cost (purchase cost), profit (amount - cost), margin (profit / amount, percent). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, warehouses, sales_channels, customer_cohort, new_since). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -163,8 +173,8 @@ func GetTools() []Tool {
 					},
 					"measures": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check", "customers"}},
-						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts, customers = COUNT(DISTINCT customer).",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty", "receipts", "avg_check", "customers", "cost", "profit", "margin"}},
+						"description": "Measures to include (default: amount, qty). receipts = COUNT(DISTINCT document), avg_check = amount / receipts, customers = COUNT(DISTINCT customer). cost = purchase cost (закупочная стоимость), profit = amount - cost, margin = profit / amount as a percentage. cost/profit/margin require the mcp:report:cost permission — they are only offered to authorized users (omitted from this enum otherwise); for correct margin/profit totals request them together with amount and cost.",
 					},
 					"top": map[string]any{
 						"type":        "integer",
@@ -223,7 +233,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolCustomerSummary,
-			Description: "Get a summary card for a single customer over a period: total amount, qty, number of receipts, average check, last purchase date, and top-N most bought products. Replaces 3-4 sequential sales_report calls with one. Use when the user asks about a specific customer (e.g. 'how much did X buy', 'tell me about customer Y').",
+			Description: "Get a summary card for a single customer over a period: total amount, qty, number of receipts, average check, last purchase date, and top-N most bought products. For users with the mcp:report:cost permission, totals also include cost (purchase cost), profit (amount - cost) and margin (profit / amount, percent). Replaces 3-4 sequential sales_report calls with one. Use when the user asks about a specific customer (e.g. 'how much did X buy', 'tell me about customer Y').",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
