@@ -134,6 +134,76 @@ type StockReportResponse struct {
 	Totals  map[string]interface{} `json:"totals,omitempty"`
 }
 
+type CashCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Code     string `json:"code,omitempty"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveCashResponse struct {
+	Candidates []CashCandidate `json:"candidates"`
+}
+
+// CashFilters — общий фильтр для денежных отчётов. CashIDs — UUID касс (resolve_cash);
+// для cash_flow применяется к измерению Счет, для cash_balance — к измерению Касса.
+// Остальные поля используются только в cash_flow (фильтры по измерениям ВидОперации и Аналитика):
+//   OperationIDs   — виды операций (resolve_operation), измерение ВидОперации;
+//   CostArticleIDs — статьи затрат (resolve_cost_article), аналитика, IN HIERARCHY;
+//   CustomerIDs    — контрагенты (resolve_customer), аналитика, IN.
+// CostArticleIDs и CustomerIDs объединяются по аналитике через OR.
+type CashFilters struct {
+	CashIDs        []string `json:"cash_ids,omitempty"`
+	OperationIDs   []string `json:"operation_ids,omitempty"`
+	CostArticleIDs []string `json:"cost_article_ids,omitempty"`
+	CustomerIDs    []string `json:"customer_ids,omitempty"`
+}
+
+type CostArticleCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Code     string `json:"code,omitempty"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveCostArticleResponse struct {
+	Candidates []CostArticleCandidate `json:"candidates"`
+}
+
+type OperationCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveOperationResponse struct {
+	Candidates []OperationCandidate `json:"candidates"`
+}
+
+type CashBalanceRequest struct {
+	Date     string      `json:"date,omitempty"`
+	Filters  CashFilters `json:"filters,omitempty"`
+	GroupBy  []string    `json:"group_by,omitempty"`
+	Measures []string    `json:"measures,omitempty"`
+	Top      int         `json:"top,omitempty"`
+	Sort     []SortSpec  `json:"sort,omitempty"`
+}
+
+type CashFlowRequest struct {
+	Period   Period      `json:"period"`
+	Filters  CashFilters `json:"filters,omitempty"`
+	GroupBy  []string    `json:"group_by,omitempty"`
+	Measures []string    `json:"measures,omitempty"`
+	Top      int         `json:"top,omitempty"`
+	Sort     []SortSpec  `json:"sort,omitempty"`
+}
+
+type CashReportResponse struct {
+	Columns []Column               `json:"columns"`
+	Rows    [][]interface{}        `json:"rows"`
+	Totals  map[string]interface{} `json:"totals,omitempty"`
+}
+
 type TopProductsRequest struct {
 	Period  Period       `json:"period"`
 	Filters SalesFilters `json:"filters,omitempty"`

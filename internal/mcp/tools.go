@@ -9,6 +9,11 @@ const (
 	ToolTopProducts      = "top_products"
 	ToolCustomerSummary  = "customer_summary"
 	ToolResolveSalesChannel = "resolve_sales_channel"
+	ToolResolveCash      = "resolve_cash"
+	ToolResolveCostArticle = "resolve_cost_article"
+	ToolResolveOperation = "resolve_operation"
+	ToolCashBalance      = "cash_balance"
+	ToolCashFlow         = "cash_flow"
 )
 
 // ScopeReportCost — measure-level scope: доступ к закупочной стоимости / прибыли / марже
@@ -33,6 +38,11 @@ var ToolScopes = map[string]string{
 	ToolTopProducts:      "mcp:report:sales",
 	ToolCustomerSummary:  "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
+	ToolResolveCash:      "mcp:resolve",
+	ToolResolveCostArticle: "mcp:resolve",
+	ToolResolveOperation: "mcp:resolve",
+	ToolCashBalance:      "mcp:report:money",
+	ToolCashFlow:         "mcp:report:money",
 }
 
 func GetTools() []Tool {
@@ -311,6 +321,184 @@ func GetTools() []Tool {
 						},
 					},
 				},
+			},
+		},
+		{
+			Name:        ToolResolveCash,
+			Description: "Search cash desks (кассы) by name or code. Returns matching candidates for disambiguation. Pass a UUID directly to look up a known cash desk. Use the returned id in cash_balance.filters.cash_ids or cash_flow.filters.cash_ids.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (cash desk name or code)",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 10)",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        ToolResolveCostArticle,
+			Description: "Search cost articles (статьи затрат) by name or code. The catalog is hierarchical: set include_groups=true to also return groups (cost-article folders). Pass a group UUID into cash_flow.filters.cost_article_ids to aggregate over all articles within it (applied via IN HIERARCHY), or a leaf UUID for a single article. Use the returned id in cash_flow.filters.cost_article_ids.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (cost article name or code)",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 10)",
+					},
+					"include_groups": map[string]any{
+						"type":        "boolean",
+						"description": "Include catalog groups (cost-article folders) in results. Pass a group UUID to cash_flow.filters.cost_article_ids for an IN HIERARCHY filter over the whole group.",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        ToolResolveOperation,
+			Description: "Search cash-flow operation types (виды движения денег — e.g. settlements with customers / suppliers / investors) by name. Use the returned id in cash_flow.filters.operation_ids, or pass it as group_by=[\"operation\"] to break cash flow down by operation type.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (operation type name)",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 10)",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        ToolCashBalance,
+			Description: "Get cash-on-hand balance from the «ДеньгиВКассе» register as of a given date, broken down by cash desk (касса). Use group_by to pick dimensions (cash, firm), measures (balance), top to limit rows, and sort (sort.field must be a selected dimension or measure). Requires the mcp:report:money permission. NOTE: amounts are in each cash desk's own currency (the register has no currency dimension); the grand total simply sums them, so it is only meaningful when all selected cash desks share one currency.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date": map[string]any{
+						"type":        "string",
+						"format":      "date",
+						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"cash_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by cash desk IDs (from resolve_cash)",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"cash", "firm"}},
+						"description": "Group results by dimensions (default: cash). firm = owning company of the cash desk.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"balance"}},
+						"description": "Measures to include (default: balance).",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:        ToolCashFlow,
+			Description: "Get cash flow (turnovers) from the «ДвижениеДенежныхСредств» register for a period. Amounts are net of the base currency only (the register stores a duplicate row in the management-accounting currency which is excluded). Measures: inflow (gross money in), outflow (gross money out, positive), net (inflow - outflow). Dimensions (group_by): account (cash desk / bank account), operation (operation type — ВидОперации), analytics (counterparty / cost article / employee / ... — composite, returned as {id,label,kind} where kind is the entity type), firm, day, week, month. Default groups by operation and returns inflow/outflow/net. Filters: cash_ids (account dimension), operation_ids (operation type), cost_article_ids and customer_ids (both filter the analytics dimension and are combined via OR). sort.field must be a selected dimension or measure. Requires the mcp:report:money permission. Use this for questions like 'how much cash came in/out', 'spending by cost article', 'cash movements by counterparty'.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Report period",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"cash_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by cash desk IDs (from resolve_cash); applied to the account dimension.",
+							},
+							"operation_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by operation type IDs (from resolve_operation); applied to the ВидОперации dimension.",
+							},
+							"cost_article_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter the analytics dimension by cost article IDs (from resolve_cost_article). Accepts both leaf and group UUIDs — applied as IN HIERARCHY. Combined with customer_ids via OR.",
+							},
+							"customer_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter the analytics dimension by counterparty IDs (from resolve_customer). Combined with cost_article_ids via OR.",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"account", "operation", "analytics", "firm", "day", "week", "month"}},
+						"description": "Group results by dimensions (default: operation). analytics is a composite dimension (counterparty / cost article / employee / ...) returned as {id,label,kind}. day/week/month bucket by movement date.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"inflow", "outflow", "net"}},
+						"description": "Measures to include (default: inflow, outflow, net). inflow/outflow are gross and positive; net = inflow - outflow.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+				"required": []string{"period"},
 			},
 		},
 	}

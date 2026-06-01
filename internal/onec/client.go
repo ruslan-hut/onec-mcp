@@ -215,6 +215,84 @@ func (c *Client) ResolveSalesChannel(ctx context.Context, query string, limit in
 	return &resp, nil
 }
 
+func (c *Client) ResolveCash(ctx context.Context, query string, limit int) (*ResolveCashResponse, error) {
+	if cached, ok := c.resolveCache.Get("cash", query, limit); ok {
+		var resp ResolveCashResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit}
+	var resp ResolveCashResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/cash", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("cash", query, limit, payload)
+	}
+	return &resp, nil
+}
+
+func (c *Client) ResolveCostArticle(ctx context.Context, query string, limit int, includeGroups bool) (*ResolveCostArticleResponse, error) {
+	if cached, ok := c.resolveCache.Get("cost_article", query, limit); ok {
+		var resp ResolveCostArticleResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit, IncludeGroups: includeGroups}
+	var resp ResolveCostArticleResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/cost_article", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("cost_article", query, limit, payload)
+	}
+	return &resp, nil
+}
+
+func (c *Client) ResolveOperation(ctx context.Context, query string, limit int) (*ResolveOperationResponse, error) {
+	if cached, ok := c.resolveCache.Get("operation", query, limit); ok {
+		var resp ResolveOperationResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit}
+	var resp ResolveOperationResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/operation", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set("operation", query, limit, payload)
+	}
+	return &resp, nil
+}
+
+func (c *Client) CashBalance(ctx context.Context, req *CashBalanceRequest) (*CashReportResponse, error) {
+	var resp CashReportResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/cash_balance", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) CashFlow(ctx context.Context, req *CashFlowRequest) (*CashReportResponse, error) {
+	var resp CashReportResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/cash_flow", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 func (c *Client) SalesReport(ctx context.Context, req *SalesReportRequest) (*SalesReportResponse, error) {
 	var resp SalesReportResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/sales", req, &resp); err != nil {
