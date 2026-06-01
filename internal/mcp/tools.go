@@ -38,11 +38,15 @@ var ToolScopes = map[string]string{
 	ToolTopProducts:      "mcp:report:sales",
 	ToolCustomerSummary:  "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
-	ToolResolveCash:      "mcp:resolve",
-	ToolResolveCostArticle: "mcp:resolve",
-	ToolResolveOperation: "mcp:resolve",
-	ToolCashBalance:      "mcp:report:money",
-	ToolCashFlow:         "mcp:report:money",
+	// Кассы / виды операций / статьи затрат используются ТОЛЬКО денежными отчётами, поэтому их
+	// резолверы закрыты тем же scope mcp:report:money — иначе пользователь без доступа к деньгам
+	// видел бы резолверы, ссылающиеся в описании на недоступные cash_flow/cash_balance, и мог бы
+	// решить, что отчёт «есть, но спрятан». Скрываем резолверы вместе с отчётами.
+	ToolResolveCash:        "mcp:report:money",
+	ToolResolveCostArticle: "mcp:report:money",
+	ToolResolveOperation:   "mcp:report:money",
+	ToolCashBalance:        "mcp:report:money",
+	ToolCashFlow:           "mcp:report:money",
 }
 
 func GetTools() []Tool {
