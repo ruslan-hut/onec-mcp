@@ -33,10 +33,20 @@ oauth:
   access_token_ttl: "1h"
   refresh_token_ttl: "720h"
   auth_code_ttl: "10m"
+  # default_scopes — выдаются клиенту, если он не запросил конкретные.
   default_scopes:
     - "mcp:resolve"
     - "mcp:report:sales"
     - "mcp:report:stock"
+  # supported_scopes — полный список анонсируемых/допустимых scope. Должен включать ВСЕ scope из
+  # ToolScopes, иначе соответствующие инструменты режутся при DCR-регистрации до выпуска токена.
+  # Пусто = берётся из default_scopes.
+  supported_scopes:
+    - "mcp:resolve"
+    - "mcp:report:sales"
+    - "mcp:report:stock"
+    - "mcp:report:money"
+    - "mcp:report:cost"
   # Временный единый ключ для login-формы на этапе 1.
   # На этапе 2 заменится на вызов 1С /mcp/auth/verify с per-user ключами.
   dev_access_key: ""

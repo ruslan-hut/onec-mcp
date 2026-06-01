@@ -90,6 +90,12 @@ jobs:
               - "mcp:resolve"
               - "mcp:report:sales"
               - "mcp:report:stock"
+            supported_scopes:
+              - "mcp:resolve"
+              - "mcp:report:sales"
+              - "mcp:report:stock"
+              - "mcp:report:money"
+              - "mcp:report:cost"
             dev_access_key: ""
             rate_limit:
               authorize_per_minute: 10

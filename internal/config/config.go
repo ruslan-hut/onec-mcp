@@ -18,14 +18,18 @@ type Config struct {
 // OAuthConfig — настройки встроенного Authorization+Resource Server.
 // Включается через oauth.enabled=true; при включении статический Bearer на /mcp отключается.
 type OAuthConfig struct {
-	Enabled         bool             `yaml:"enabled" env-default:"false"`
-	PublicURL       string           `yaml:"public_url"`
-	Resource        string           `yaml:"resource"`
-	DBPath          string           `yaml:"db_path" env-default:"data/oauth.db"`
-	AccessTokenTTL  time.Duration    `yaml:"access_token_ttl" env-default:"1h"`
-	RefreshTokenTTL time.Duration    `yaml:"refresh_token_ttl" env-default:"720h"`
-	AuthCodeTTL     time.Duration    `yaml:"auth_code_ttl" env-default:"10m"`
-	DefaultScopes   []string         `yaml:"default_scopes"`
+	Enabled         bool          `yaml:"enabled" env-default:"false"`
+	PublicURL       string        `yaml:"public_url"`
+	Resource        string        `yaml:"resource"`
+	DBPath          string        `yaml:"db_path" env-default:"data/oauth.db"`
+	AccessTokenTTL  time.Duration `yaml:"access_token_ttl" env-default:"1h"`
+	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl" env-default:"720h"`
+	AuthCodeTTL     time.Duration `yaml:"auth_code_ttl" env-default:"10m"`
+	DefaultScopes   []string      `yaml:"default_scopes"`
+	// SupportedScopes — полный список scope, анонсируемых в OAuth metadata и допустимых при
+	// DCR-регистрации. Должен включать все scope из ToolScopes, иначе соответствующие инструменты
+	// будут вырезаны ещё до выпуска токена. Пусто = берётся из DefaultScopes.
+	SupportedScopes []string         `yaml:"supported_scopes"`
 	RateLimit       RateLimitsConfig `yaml:"rate_limit"`
 	// DevAccessKey — временный единый ключ для проверки логина на этапе 1.
 	// На этапе 2 заменяется на вызов 1С /mcp/auth/verify.
