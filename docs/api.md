@@ -14,13 +14,21 @@ Token is configured via `api.bearer_token` in config. If token is not configured
 
 ### MCP Endpoint (`/mcp`)
 
-Requires separate Bearer token:
+OAuth 2.0 is the primary authentication for `/mcp`. LLM clients register
+dynamically, obtain a per-user access token, and the token's granted scopes
+drive tool access (see [OAuth Setup & Admin Guide](oauth-setup.md)):
+
+```
+Authorization: Bearer <oauth-access-token>
+```
+
+When `oauth.enabled = false`, `/mcp` falls back to a static Bearer token
+configured via `mcp.bearer_token` — intended only for local development and
+`curl` tests:
 
 ```
 Authorization: Bearer <mcp-token>
 ```
-
-Token is configured via `mcp.bearer_token` in config.
 
 ---
 
