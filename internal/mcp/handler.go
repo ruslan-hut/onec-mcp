@@ -182,6 +182,12 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callCashBalance(r, params.Arguments)
 	case ToolCashFlow:
 		result, err = h.callCashFlow(r, params.Arguments)
+	case ToolReceivablesBalance:
+		result, err = h.callReceivablesBalance(r, params.Arguments)
+	case ToolPayablesBalance:
+		result, err = h.callPayablesBalance(r, params.Arguments)
+	case ToolPurchasesReport:
+		result, err = h.callPurchasesReport(r, params.Arguments)
 	case ToolSalesReport:
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
@@ -493,6 +499,126 @@ func (h *Handler) callCashFlow(r *http.Request, args any) (*CallToolResult, erro
 	}
 
 	resp, err := h.onecClient.CashFlow(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+type settlementsArgs struct {
+	Date     string                  `json:"date"`
+	Filters  onec.SettlementsFilters `json:"filters"`
+	GroupBy  []string                `json:"group_by"`
+	Measures []string                `json:"measures"`
+	Top      int                     `json:"top"`
+	Sort     []onec.SortSpec         `json:"sort"`
+}
+
+func (h *Handler) callReceivablesBalance(r *http.Request, args any) (*CallToolResult, error) {
+	var a settlementsArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
+		a.Top = h.cfg.Limits.MaxRows
+	}
+
+	req := &onec.SettlementsRequest{
+		Date:     a.Date,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      a.Top,
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.Receivables(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+func (h *Handler) callPayablesBalance(r *http.Request, args any) (*CallToolResult, error) {
+	var a settlementsArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
+		a.Top = h.cfg.Limits.MaxRows
+	}
+
+	req := &onec.SettlementsRequest{
+		Date:     a.Date,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      a.Top,
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.Payables(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+type purchasesArgs struct {
+	Period   onec.Period           `json:"period"`
+	Filters  onec.PurchasesFilters `json:"filters"`
+	GroupBy  []string              `json:"group_by"`
+	Measures []string              `json:"measures"`
+	Top      int                   `json:"top"`
+	Sort     []onec.SortSpec       `json:"sort"`
+}
+
+func (h *Handler) callPurchasesReport(r *http.Request, args any) (*CallToolResult, error) {
+	var a purchasesArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
+		a.Top = h.cfg.Limits.MaxRows
+	}
+
+	req := &onec.PurchasesRequest{
+		Period:   a.Period,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      a.Top,
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.Purchases(r.Context(), req)
 	if err != nil {
 		return nil, err
 	}

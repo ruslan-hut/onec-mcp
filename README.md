@@ -14,6 +14,7 @@ A Go service that acts as a gateway between an LLM/MCP client and 1C ERP via HTT
 - **Sales reporting** - sales, top products, and per-customer summaries with filters, grouping, sorting, and (scoped) cost/profit/margin measures
 - **Stock reporting** - product stock balances as of a date
 - **Money reporting** - cash-on-hand balances and cash flow turnovers
+- **Settlements & purchases** - receivables/payables balances (ДЗ/КЗ, expanded by sign) and goods-purchase turnover; together with stock they cover the full Cash Conversion Cycle (DIO/DSO/DPO)
 - **MCP protocol support** - JSON-RPC 2.0 endpoint for LLM integration
 - **OAuth 2.0** - per-user keys, scope-based tool access, and audit logging
 
@@ -104,6 +105,11 @@ guarded by `api.bearer_token`, independent of OAuth. See the
 | `/resolve/sales_channel` | POST | Search sales channels |
 | `/reports/sales` | POST | Sales report |
 | `/reports/stock` | POST | Stock balance report |
+| `/reports/cash_balance` | POST | Cash-on-hand balance |
+| `/reports/cash_flow` | POST | Cash flow turnovers |
+| `/reports/receivables` | POST | Customer receivables balance (ДЗ + advances) |
+| `/reports/payables` | POST | Supplier payables balance (КЗ + advances) |
+| `/reports/purchases` | POST | Goods-purchase turnover |
 | `/mcp` | POST | MCP JSON-RPC 2.0 |
 | `/.well-known/oauth-protected-resource` | GET | OAuth resource metadata |
 | `/.well-known/oauth-authorization-server` | GET | OAuth server metadata |
@@ -131,6 +137,9 @@ discovery endpoints only when an OAuth server is configured.
 | `stock_balance` | `mcp:report:stock` | Product stock balance as of a date |
 | `cash_balance` | `mcp:report:money` | Cash-on-hand balance per cash desk |
 | `cash_flow` | `mcp:report:money` | Cash flow turnovers for a period |
+| `receivables_balance` | `mcp:report:money` | Customer receivables (ДЗ) and advances received, expanded by sign |
+| `payables_balance` | `mcp:report:money` | Supplier payables (КЗ) and advances issued, expanded by sign |
+| `purchases_report` | `mcp:report:money` | Goods-purchase turnover by supplier/month (net of returns) |
 
 ### Scopes
 
