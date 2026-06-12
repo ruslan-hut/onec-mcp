@@ -13,9 +13,11 @@
 - [ ] A-запись `mcp.example.com` → сервер гейта.
 - [ ] Reverse-proxy (nginx/Caddy) с HTTPS на `127.0.0.1:8088`. **HTTPS обязателен** (ChatGPT не примет HTTP).
 
-## 3. Сборка и установка
+## 3. Установка
 
-- [ ] `go build -o /opt/onec-mcp/onec-mcp ./cmd/server`.
+Бинарники собираются автоматически в [GitHub Releases](https://github.com/ruslan-hut/onec-mcp/releases) на каждый тег `v*` — собирать локально не нужно.
+
+- [ ] Скачать `onec-mcp-linux-amd64` из последнего релиза → `/opt/onec-mcp/onec-mcp`, `chmod +x`.
 - [ ] Конфиг в `/etc/conf/onec-mcp.yml` из `configs/config.prod.yml.tpl`.
 - [ ] `deploy/onec-mcp.service` → `/etc/systemd/system/`, `systemctl enable --now onec-mcp`.
 
