@@ -96,6 +96,7 @@ jobs:
               - "mcp:report:stock"
               - "mcp:report:money"
               - "mcp:report:cost"
+              - "mcp:admin:eventlog"
             dev_access_key: ""
             rate_limit:
               authorize_per_minute: 10
