@@ -330,6 +330,27 @@ func (c *Client) CustomerSummary(ctx context.Context, req *CustomerSummaryReques
 	return resp, nil
 }
 
+// EventLog проксирует тело админ-инструмента чтения журнала регистрации (event_log /
+// object_history) в 1С. Тело передаётся как есть — 1С сама разбирает поля
+// user/session/level/events/object_type/object_id/period/limit. Ответ возвращается
+// json.RawMessage: гейту достаточно прокинуть его наверх, без типизированной декомпозиции.
+func (c *Client) EventLog(ctx context.Context, body any) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/admin/eventlog", body, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// FindDocument резолвит документ по типу+номеру+дате; тело и ответ — passthrough.
+func (c *Client) FindDocument(ctx context.Context, body any) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/admin/find_document", body, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // VerifyMCPKey проверяет MCP-ключ через 1С. Возвращает APIError со статусом 401, если ключ невалиден —
 // вызывающий код должен это отличать от network/server ошибок.
 func (c *Client) VerifyMCPKey(ctx context.Context, key string) (*AuthVerifyResponse, error) {

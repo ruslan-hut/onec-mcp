@@ -369,12 +369,34 @@ Get available tools and their JSON schemas.
         "name": "stock_balance",
         "description": "Get product stock balance as of a given date...",
         "inputSchema": { ... }
+      },
+      {
+        "name": "event_log",
+        "description": "Read the 1C event log (журнал регистрации): errors/events for a period by level or type...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "object_history",
+        "description": "Event log for a specific object or type — who created/changed/posted/deleted it...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "find_document",
+        "description": "Find a document by type+number+date, returns its UUID for object_history...",
+        "inputSchema": { ... }
       }
     ]
   },
   "id": 2
 }
 ```
+
+> The list above is abbreviated. The actual set returned by `tools/list` is **filtered by the
+> caller's OAuth scopes** (when OAuth is enabled): a tool is only shown if its required scope is
+> granted. So the admin tools (`event_log`, `object_history`, `find_document`) appear only for
+> tokens carrying `mcp:admin:eventlog`, and `sales_report`'s `cost`/`profit`/`margin` measures are
+> stripped without `mcp:report:cost`. There are also tools not shown here (resolve
+> `sales_channel`/`cash`/`cost_article`/`operation`, reports `top_products`/`customer_summary`/`cash_balance`/`cash_flow`).
 
 ---
 
@@ -433,6 +455,68 @@ Execute a tool with arguments.
     "isError": true
   },
   "id": 3
+}
+```
+
+---
+
+## Admin Tools (event log)
+
+Three tools for event-log analysis, all gated by the **`mcp:admin:eventlog`** scope (the log
+contains PII). They are visible in `tools/list` only for tokens that carry this scope. The tool
+result `content[].text` is the JSON returned by 1C (see `onec-integration.md` for the full payload
+shape). On the 1C side reads run in privileged mode, so the service user needs no extra rights.
+
+### `event_log`
+
+List events for a period, filtered by severity and/or technical event type, optionally by user or
+session. All filters are independent and optional; `period` defaults to the current day. Events come
+back chronological (oldest first).
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `level` | array | No | Severity: `error` / `warning` / `information` / `note`. e.g. `["error"]` for "errors today". |
+| `events` | array | No | Technical event names: `_$Data$_.Post` (posting), `_$Data$_.New`, `_$Data$_.Update`, `_$Data$_.Delete`, `_$Session$_.Start` (login), … |
+| `user` | string | No | Substring of the infobase user login / full name; resolved to all matching users. |
+| `session` | integer | No | Session number — pull the full trace of one session (e.g. the one where an error occurred). |
+| `period.from` / `period.to` | string | No | Window (YYYY-MM-DD). Defaults to the current day. |
+| `limit` | integer | No | Max events (default 100, max 500). |
+
+### `object_history`
+
+Event log for one specific object or a whole object type — who created/changed/posted/unposted/deleted it, and when.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `object_type` | string | Yes | Full metadata name: `Document.<Name>` or `Catalog.<Name>`. |
+| `object_id` | string | No | Object UUID (from `find_document` or a `resolve_*` tool). Omit for all objects of `object_type`. |
+| `events` | array | No | Optional technical event names to narrow to. |
+| `period.from` / `period.to` | string | No | Window (YYYY-MM-DD). Defaults to the current day. |
+| `limit` | integer | No | Max events (default 100, max 500). |
+
+### `find_document`
+
+Resolve a document to its UUID so it can be audited via `object_history`.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `doc_type` | string | Yes | Document metadata name (`ДокументОтгрузки`); `Document.` prefix optional. |
+| `number` | string | No\* | Document number or substring. |
+| `period.from` / `period.to` | string | No\* | Date window (YYYY-MM-DD). |
+| `limit` | integer | No | Max candidates (default 20, max 100). |
+
+\* At least one of `number` or `period` is required.
+
+**Example — "list errors today":**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "event_log",
+    "arguments": { "level": ["error"] }
+  },
+  "id": 4
 }
 ```
 

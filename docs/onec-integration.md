@@ -13,8 +13,15 @@ The Go service acts as a gateway and expects 1C to provide three HTTP endpoints:
 | `POST /mcp/resolve/product` | Search products |
 | `POST /mcp/reports/sales` | Generate sales report |
 | `POST /mcp/reports/stock` | Stock balance report |
+| `POST /mcp/admin/eventlog` | Read the event log (журнал регистрации) — gated by `mcp:admin:eventlog` |
+| `POST /mcp/admin/find_document` | Resolve a document to its UUID — gated by `mcp:admin:eventlog` |
 
 Base URL is configured via `onec.base_url` in config.
+
+> Note: this list shows the core endpoints. The gate also calls the resolve endpoints for
+> `sales_channel` / `cash` / `cost_article` / `operation`, the report endpoints
+> `top_products` / `customer_summary` / `cash_balance` / `cash_flow`, plus `POST /mcp/auth/verify`
+> and `GET /mcp/health`. The admin endpoints below were the latest addition.
 
 ## Authentication
 
@@ -352,6 +359,156 @@ Same shape as Sales Report — `{columns, rows, totals}`.
 - Items with the `ДляПроизводства` flag (both `Товар` and `Склад`) are excluded on the 1C side regardless of filters.
 - Default group_by is both `warehouse` and `product`; default measure is `qty` only.
 - Resource fields map to virtual table balance fields: `qty` → `КоличествоBalance`, `amount` → `СуммаBalance`.
+
+---
+
+## Admin Endpoints
+
+Administrative tools for event-log analysis, backing the `event_log`, `object_history` and
+`find_document` MCP tools. All three are gated by the **`mcp:admin:eventlog`** scope: the gate
+hides the tools from users without it (filtered out of `tools/list`) and forwards the resolved
+scopes to 1C via the `X-MCP-Scopes` header, where the `/admin/{action}` handler re-checks the
+scope (defense in depth). The event log contains PII — grant this scope only to trusted accounts.
+
+On the 1C side the export and document lookup run in **privileged mode**, so the service's
+infobase user does **not** need the "event log" administrative right.
+
+---
+
+## Endpoint: Event Log
+
+Backs both `event_log` and `object_history` — they POST to the same endpoint; 1C reads
+whichever filter fields are present. `event_log` leads with `level` / `events` filtering
+('errors today', 'postings today'), with `user` / `session` as optional filters; `object_history`
+is the object-centric framing. Events are returned in chronological order (oldest first),
+which is what you want when reconstructing a session trace up to an error.
+
+```
+POST {base_url}/mcp/admin/eventlog
+Content-Type: application/json
+```
+
+### Request
+
+```json
+{
+  "user": "Ivanov",
+  "session": 1234,
+  "level": ["error", "warning"],
+  "events": ["_$Data$_.Post"],
+  "object_type": "Document.ДокументОтгрузки",
+  "object_id": "e5d7a8b2-1234-5678-9abc-def012345678",
+  "period": { "from": "2026-06-01", "to": "2026-06-19" },
+  "limit": 100
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user` | string | No | Substring of the infobase user login / full name; resolved to all matching users' UUIDs. If none match, an empty result with a `note` is returned (not the whole log). |
+| `session` | integer | No | Session number — pull the full action trace of one session (e.g. the one in which an error occurred). |
+| `level` | array | No | `error` / `warning` / `information` / `note`. Omit for all levels. |
+| `events` | array | No | Technical event names: `_$Data$_.New`, `_$Data$_.Update`, `_$Data$_.Post`, `_$Data$_.Unpost`, `_$Data$_.Delete`, `_$Session$_.Start`, … |
+| `object_type` | string | No | Full metadata name (`Document.<Name>` / `Catalog.<Name>`). With `object_id` → the specific object; alone → all objects of that type. |
+| `object_id` | string | No | UUID of a specific object (used together with `object_type`). |
+| `period.from` / `period.to` | string | No | Window (YYYY-MM-DD). Defaults to the current day. |
+| `limit` | integer | No | Max events (default 100, max 500). If exceeded, the earliest events in the window are returned — narrow the period or add filters. |
+
+### Response
+
+```json
+{
+  "period": { "from": "2026-06-01T00:00:00", "to": "2026-06-19T23:59:59" },
+  "count": 1,
+  "events": [
+    {
+      "date": "2026-06-18T14:03:21",
+      "level": "error",
+      "user": "Ivanov Petro",
+      "event": "_$Data$_.Post",
+      "event_presentation": "Проведение",
+      "comment": "Не удалось провести документ: ...",
+      "metadata": "Документ отгрузки",
+      "object": "Отгрузка 00-000123 от 18.06.2026",
+      "session": 1234,
+      "transaction_status": "RolledBack",
+      "computer": "POS-01"
+    }
+  ],
+  "matched_users": ["Ivanov Petro"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `period` | object | Effective window (ISO 8601). |
+| `count` | integer | Number of events returned. |
+| `events` | array | Log records, chronological (oldest first). |
+| `events[].event` | string | Technical event name (e.g. `_$Data$_.Post`). |
+| `events[].event_presentation` | string | Human-readable action (Создание / Изменение / Проведение / Отмена проведения / Удаление). |
+| `events[].object` | string | Presentation of the affected data. |
+| `matched_users` | array | Present only when `user` was given — the users the filter matched. |
+| `note` | string | Present when nothing matched (e.g. unknown user). |
+
+---
+
+## Endpoint: Find Document
+
+Backs `find_document` — resolves a document to its UUID so it can be audited via the event-log
+endpoint (`object_type` + `object_id`).
+
+```
+POST {base_url}/mcp/admin/find_document
+Content-Type: application/json
+```
+
+### Request
+
+```json
+{
+  "doc_type": "ДокументОтгрузки",
+  "number": "000123",
+  "period": { "from": "2026-06-01", "to": "2026-06-19" },
+  "limit": 20
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `doc_type` | string | Yes | Document metadata name (`ДокументОтгрузки`); the `Document.` prefix is optional. Validated against `Metadata.Documents` on the 1C side. |
+| `number` | string | No\* | Document number or a substring of it. |
+| `period.from` / `period.to` | string | No\* | Date window (YYYY-MM-DD). |
+| `limit` | integer | No | Max candidates (default 20, max 100). |
+
+\* At least one of `number` or `period` is required — otherwise the whole document flow would be returned.
+
+### Response
+
+```json
+{
+  "doc_type": "Document.ДокументОтгрузки",
+  "candidates": [
+    {
+      "id": "e5d7a8b2-1234-5678-9abc-def012345678",
+      "object_type": "Document.ДокументОтгрузки",
+      "number": "00-000123",
+      "date": "2026-06-18T14:03:00",
+      "posted": true,
+      "deletion_mark": false,
+      "presentation": "Отгрузка 00-000123 от 18.06.2026"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `doc_type` | string | Normalized full type name. |
+| `candidates[].id` | string | Document UUID — pass as `object_id` to the event-log endpoint. |
+| `candidates[].object_type` | string | Ready-to-use `object_type` for the event-log endpoint. |
+| `candidates[].number` / `date` | string | Document number and date (ISO 8601). |
+| `candidates[].posted` | boolean | Whether the document is posted (Проведен). |
+| `candidates[].deletion_mark` | boolean | Deletion mark. |
 
 ---
 

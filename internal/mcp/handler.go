@@ -190,6 +190,12 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callTopProducts(r, params.Arguments)
 	case ToolCustomerSummary:
 		result, err = h.callCustomerSummary(r, params.Arguments)
+	case ToolEventLog:
+		result, err = h.callEventLog(r, params.Arguments)
+	case ToolObjectHistory:
+		result, err = h.callEventLog(r, params.Arguments)
+	case ToolFindDocument:
+		result, err = h.callFindDocument(r, params.Arguments)
 	default:
 		h.auditToolCall(auth, params.Name, false, "unknown_tool", started)
 		return InvalidParams(req.ID, "unknown tool: "+params.Name)
@@ -650,6 +656,31 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 	}
 
 	resp, err := h.onecClient.CustomerSummary(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+// callEventLog обслуживает event_log и object_history — оба ходят в один админ-эндпоинт
+// чтения журнала регистрации. Аргументы инструмента прокидываются в 1С без переупаковки
+// (1С сама разбирает user/session/level/events/object_type/object_id/period/limit).
+func (h *Handler) callEventLog(r *http.Request, args any) (*CallToolResult, error) {
+	resp, err := h.onecClient.EventLog(r.Context(), args)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+func (h *Handler) callFindDocument(r *http.Request, args any) (*CallToolResult, error) {
+	resp, err := h.onecClient.FindDocument(r.Context(), args)
 	if err != nil {
 		return nil, err
 	}

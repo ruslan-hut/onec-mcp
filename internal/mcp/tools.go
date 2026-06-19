@@ -1,19 +1,22 @@
 package mcp
 
 const (
-	ToolResolveCustomer  = "resolve_customer"
-	ToolResolveWarehouse = "resolve_warehouse"
-	ToolResolveProduct   = "resolve_product"
-	ToolSalesReport      = "sales_report"
-	ToolStockBalance     = "stock_balance"
-	ToolTopProducts      = "top_products"
-	ToolCustomerSummary  = "customer_summary"
+	ToolResolveCustomer     = "resolve_customer"
+	ToolResolveWarehouse    = "resolve_warehouse"
+	ToolResolveProduct      = "resolve_product"
+	ToolSalesReport         = "sales_report"
+	ToolStockBalance        = "stock_balance"
+	ToolTopProducts         = "top_products"
+	ToolCustomerSummary     = "customer_summary"
 	ToolResolveSalesChannel = "resolve_sales_channel"
-	ToolResolveCash      = "resolve_cash"
-	ToolResolveCostArticle = "resolve_cost_article"
-	ToolResolveOperation = "resolve_operation"
-	ToolCashBalance      = "cash_balance"
-	ToolCashFlow         = "cash_flow"
+	ToolResolveCash         = "resolve_cash"
+	ToolResolveCostArticle  = "resolve_cost_article"
+	ToolResolveOperation    = "resolve_operation"
+	ToolCashBalance         = "cash_balance"
+	ToolCashFlow            = "cash_flow"
+	ToolEventLog            = "event_log"
+	ToolObjectHistory       = "object_history"
+	ToolFindDocument        = "find_document"
 )
 
 // ScopeReportCost — measure-level scope: доступ к закупочной стоимости / прибыли / марже
@@ -30,13 +33,13 @@ var CostMeasures = []string{"cost", "profit", "margin"}
 // Проверяется в handleToolsCall и используется для фильтрации tools/list по правам пользователя.
 // При добавлении нового инструмента — обязательно прописать его сюда, иначе вызов будет отказан.
 var ToolScopes = map[string]string{
-	ToolResolveCustomer:  "mcp:resolve",
-	ToolResolveWarehouse: "mcp:resolve",
-	ToolResolveProduct:   "mcp:resolve",
-	ToolSalesReport:      "mcp:report:sales",
-	ToolStockBalance:     "mcp:report:stock",
-	ToolTopProducts:      "mcp:report:sales",
-	ToolCustomerSummary:  "mcp:report:sales",
+	ToolResolveCustomer:     "mcp:resolve",
+	ToolResolveWarehouse:    "mcp:resolve",
+	ToolResolveProduct:      "mcp:resolve",
+	ToolSalesReport:         "mcp:report:sales",
+	ToolStockBalance:        "mcp:report:stock",
+	ToolTopProducts:         "mcp:report:sales",
+	ToolCustomerSummary:     "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
 	// Кассы / виды операций / статьи затрат используются ТОЛЬКО денежными отчётами, поэтому их
 	// резолверы закрыты тем же scope mcp:report:money — иначе пользователь без доступа к деньгам
@@ -47,6 +50,11 @@ var ToolScopes = map[string]string{
 	ToolResolveOperation:   "mcp:report:money",
 	ToolCashBalance:        "mcp:report:money",
 	ToolCashFlow:           "mcp:report:money",
+	// Админ-инструменты: чтение журнала регистрации и резолв документов для аудита.
+	// Журнал содержит PII — отдельное чувствительное право, выдаётся только доверенным аккаунтам.
+	ToolEventLog:      "mcp:admin:eventlog",
+	ToolObjectHistory: "mcp:admin:eventlog",
+	ToolFindDocument:  "mcp:admin:eventlog",
 }
 
 func GetTools() []Tool {
@@ -503,6 +511,110 @@ func GetTools() []Tool {
 					},
 				},
 				"required": []string{"period"},
+			},
+		},
+		{
+			Name:        ToolEventLog,
+			Description: "Read the 1C event log (журнал регистрации). List events for a period filtered by severity and/or technical event type, and optionally by user or session — all filters are independent and optional, and the period defaults to the current day. Common questions: 'errors today' → level=[\"error\"]; 'all postings today' → events=[\"_$Data$_.Post\"]; 'logins today' → events=[\"_$Session$_.Start\"]; 'what did user X do' → user=\"X\". To reconstruct what led to an error: first call with level=[\"error\"] (and user, if known) to locate the failure — each event carries its session number and timestamp — then call again with that session number and no level filter to get the full chronological trace of that session up to the error. Events come back in chronological order (oldest first) with date, level, user, event (technical name like _$Data$_.Post), event_presentation, comment, metadata, object, session, transaction_status, computer. For the audit trail of one specific document or catalog item, use object_history instead. Requires the mcp:admin:eventlog permission (the log contains PII).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"level": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"error", "warning", "information", "note"}},
+						"description": "Filter by severity. Omit for all levels. Use [\"error\"] for 'list errors', [\"error\",\"warning\"] for problems.",
+					},
+					"events": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Filter by technical event names, e.g. _$Data$_.Post (posting), _$Data$_.Update, _$Data$_.New, _$Data$_.Delete, _$Session$_.Start (login). Use this for 'what was posted/created/deleted/logged in'.",
+					},
+					"user": map[string]any{
+						"type":        "string",
+						"description": "Optional. Substring of the infobase user's login or full name; resolved to all matching users. If nothing matches, an empty result with a note is returned (not the whole log).",
+					},
+					"session": map[string]any{
+						"type":        "integer",
+						"description": "Optional. Session number — pull the full action trace of one session (e.g. the session in which an error occurred).",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Time window (defaults to the current day if omitted). If the result is capped by limit, the earliest events in the window are returned — narrow the period or add filters to see the rest.",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of events to return (default 100, max 500).",
+					},
+				},
+			},
+		},
+		{
+			Name:        ToolObjectHistory,
+			Description: "Read the 1C event log (журнал регистрации) for a specific OBJECT or object TYPE — who created, changed, posted, unposted or deleted it, and when. Pass object_type plus object_id (UUID) to audit one specific object, or object_type alone for all events of that type in the period. object_type is the full metadata name: for catalog items use 'Catalog.<Name>' (e.g. Catalog.Контрагенты) and get the UUID from resolve_customer/resolve_product/resolve_warehouse; for documents use 'Document.<Name>' (e.g. Document.ДокументОтгрузки) and get the UUID from find_document (by type+number+date). Returns events (chronological) with date, user, event/event_presentation (Создание/Изменение/Проведение/Отмена проведения/Удаление), comment, session. Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"object_type": map[string]any{
+						"type":        "string",
+						"description": "Full metadata name: 'Document.<Name>' or 'Catalog.<Name>' (e.g. Document.ДокументОтгрузки, Catalog.Контрагенты).",
+					},
+					"object_id": map[string]any{
+						"type":        "string",
+						"description": "UUID of the specific object (from find_document for documents, or resolve_* for catalog items). Omit to get events for ALL objects of object_type in the period.",
+					},
+					"events": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Optional technical event names to narrow to, e.g. _$Data$_.Post (posting), _$Data$_.Update, _$Data$_.New, _$Data$_.Delete.",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Time window (defaults to the current day if omitted)",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of events to return (default 100, max 500).",
+					},
+				},
+				"required": []string{"object_type"},
+			},
+		},
+		{
+			Name:        ToolFindDocument,
+			Description: "Find a 1C document by type, number and/or date — returns matching candidates with their UUID (id) so you can audit them with object_history. doc_type is the document metadata name, e.g. 'ДокументОтгрузки' (the 'Document.' prefix is optional). You must provide at least 'number' (substring match) or 'period' (search window). Returns candidates with id, object_type, number, date, posted, deletion_mark, presentation. Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"doc_type": map[string]any{
+						"type":        "string",
+						"description": "Document metadata name, e.g. ДокументОтгрузки, ПриходнаяНакладная, РозничныйЧек, ЗаказПокупателя, РасходнаяНакладная. 'Document.' prefix optional.",
+					},
+					"number": map[string]any{
+						"type":        "string",
+						"description": "Document number or a substring of it.",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Date window to search within",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum candidates to return (default 20, max 100).",
+					},
+				},
+				"required": []string{"doc_type"},
 			},
 		},
 	}
