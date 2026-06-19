@@ -10,10 +10,13 @@ A Go service that acts as a gateway between an LLM/MCP client and 1C ERP via HTT
 
 ## Features
 
-- **Customer resolution** - search customers by free-text query with disambiguation support
-- **Warehouse resolution** - search warehouses by free-text query with disambiguation support
-- **Sales reporting** - fetch sales data with filters, grouping, and sorting
+- **Reference resolution** - search customers, warehouses, products, sales channels, cash desks, cost articles, and operation types by free-text query, with hierarchical group support
+- **Sales reporting** - sales, top products, and per-customer summaries with filters, grouping, sorting, and (scoped) cost/profit/margin measures
+- **Stock reporting** - product stock balances as of a date
+- **Money reporting** - cash-on-hand balances and cash flow turnovers
+- **Settlements & purchases** - receivables/payables balances (ДЗ/КЗ, expanded by sign) and goods-purchase turnover; together with stock they cover the full Cash Conversion Cycle (DIO/DSO/DPO)
 - **MCP protocol support** - JSON-RPC 2.0 endpoint for LLM integration
+- **OAuth 2.0** - per-user keys, scope-based tool access, and audit logging
 
 ## Requirements
 
@@ -29,10 +32,10 @@ go run ./cmd/server
 # Test health endpoint
 curl http://localhost:8088/health
 
-# Test MCP endpoint
+# Test MCP endpoint (OAuth token, or the static fallback when oauth.enabled = false)
 curl -X POST http://localhost:8088/mcp \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer your-secret-token' \
+  -H 'Authorization: Bearer <oauth-access-token>' \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
@@ -54,8 +57,17 @@ cp configs/config.yml configs/config.local.yml
 | `limits.resolve_limit` | Max resolve results | `10` |
 | `limits.max_rows` | Max report rows | `5000` |
 | `mcp.enabled` | Enable MCP endpoint | `true` |
-| `mcp.bearer_token` | Bearer token for MCP auth | - |
+| `oauth.enabled` | Enable OAuth 2.0 (primary auth for `/mcp`) | `true` |
+| `mcp.bearer_token` | Static fallback token for `/mcp` (used only when `oauth.enabled = false`) | - |
 | `api.bearer_token` | Bearer token for REST API auth | - |
+
+**Authentication.** OAuth 2.0 is the primary auth for the `/mcp` endpoint: LLM
+clients register dynamically, obtain a per-user token, and the token's granted
+scopes drive tool access. The static `mcp.bearer_token` is only a fallback for
+local development and `curl` tests when `oauth.enabled = false`. REST endpoints
+(`/resolve/*`, `/reports/*`) are a separate server-side integration surface
+guarded by `api.bearer_token`, independent of OAuth. See the
+[OAuth Setup & Admin Guide](docs/oauth-setup.md).
 
 ## Documentation
 
@@ -76,6 +88,7 @@ cp configs/config.yml configs/config.local.yml
 │   ├── api/             # HTTP handlers and router
 │   ├── config/          # Configuration loader
 │   ├── mcp/             # MCP JSON-RPC handler
+│   ├── oauth/           # OAuth 2.0 server, scopes, audit
 │   └── onec/            # 1C HTTP client
 ├── go.mod
 └── go.sum
@@ -89,16 +102,50 @@ cp configs/config.yml configs/config.local.yml
 | `/resolve/customer` | POST | Search customers |
 | `/resolve/warehouse` | POST | Search warehouses |
 | `/resolve/product` | POST | Search products |
+| `/resolve/sales_channel` | POST | Search sales channels |
 | `/reports/sales` | POST | Sales report |
 | `/reports/stock` | POST | Stock balance report |
+| `/reports/cash_balance` | POST | Cash-on-hand balance |
+| `/reports/cash_flow` | POST | Cash flow turnovers |
+| `/reports/receivables` | POST | Customer receivables balance (ДЗ + advances) |
+| `/reports/payables` | POST | Supplier payables balance (КЗ + advances) |
+| `/reports/purchases` | POST | Goods-purchase turnover |
 | `/mcp` | POST | MCP JSON-RPC 2.0 |
+| `/.well-known/oauth-protected-resource` | GET | OAuth resource metadata |
+| `/.well-known/oauth-authorization-server` | GET | OAuth server metadata |
+| `/oauth/register` | POST | Dynamic client registration |
+| `/oauth/authorize` | GET/POST | Authorization endpoint |
+| `/oauth/token` | POST | Token endpoint |
+
+REST endpoints are mounted only when `api.bearer_token` is set; the OAuth and
+discovery endpoints only when an OAuth server is configured.
 
 ## MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `resolve_customer` | Search customers by name, phone, etc. |
-| `resolve_warehouse` | Search warehouses by name or code |
-| `resolve_product` | Search products by name or артикул |
-| `sales_report` | Get sales with filters and grouping |
-| `stock_balance` | Get product stock balance as of a date |
+| Tool | Scope | Description |
+|------|-------|-------------|
+| `resolve_customer` | `mcp:resolve` | Search customers by name, phone, etc. (optional catalog groups) |
+| `resolve_warehouse` | `mcp:resolve` | Search warehouses by name or code |
+| `resolve_product` | `mcp:resolve` | Search products by name or артикул (optional catalog groups) |
+| `resolve_sales_channel` | `mcp:resolve` | Search hierarchical sales channels |
+| `resolve_cash` | `mcp:report:money` | Search cash desks (кассы) |
+| `resolve_cost_article` | `mcp:report:money` | Search cost articles (статьи затрат) |
+| `resolve_operation` | `mcp:report:money` | Search cash-flow operation types |
+| `sales_report` | `mcp:report:sales` | Sales with filters, grouping, sorting, cohorts |
+| `top_products` | `mcp:report:sales` | Top-N best-selling products for a period |
+| `customer_summary` | `mcp:report:sales` | Summary card for a single customer |
+| `stock_balance` | `mcp:report:stock` | Product stock balance as of a date |
+| `cash_balance` | `mcp:report:money` | Cash-on-hand balance per cash desk |
+| `cash_flow` | `mcp:report:money` | Cash flow turnovers for a period |
+| `receivables_balance` | `mcp:report:money` | Customer receivables (ДЗ) and advances received, expanded by sign |
+| `payables_balance` | `mcp:report:money` | Supplier payables (КЗ) and advances issued, expanded by sign |
+| `purchases_report` | `mcp:report:money` | Goods-purchase turnover by supplier/month (net of returns) |
+
+### Scopes
+
+Each tool requires a scope; `tools/list` is filtered to the caller's granted
+scopes and `tools/call` is rejected without the matching scope. The
+`mcp:report:cost` scope is measure-level — it unlocks the `cost`, `profit`, and
+`margin` measures in `sales_report` and `customer_summary`. Scopes are enforced
+again on the 1C side via the `X-MCP-Scopes` header (defense in depth). See the
+[OAuth Setup & Admin Guide](docs/oauth-setup.md) for issuing per-user keys.

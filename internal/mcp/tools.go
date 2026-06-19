@@ -14,6 +14,9 @@ const (
 	ToolResolveOperation    = "resolve_operation"
 	ToolCashBalance         = "cash_balance"
 	ToolCashFlow            = "cash_flow"
+	ToolReceivablesBalance  = "receivables_balance"
+	ToolPayablesBalance     = "payables_balance"
+	ToolPurchasesReport     = "purchases_report"
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
@@ -50,6 +53,11 @@ var ToolScopes = map[string]string{
 	ToolResolveOperation:   "mcp:report:money",
 	ToolCashBalance:        "mcp:report:money",
 	ToolCashFlow:           "mcp:report:money",
+	// Взаиморасчёты (ДЗ/КЗ) — та же чувствительность, что денежные отчёты: один scope mcp:report:money.
+	ToolReceivablesBalance: "mcp:report:money",
+	ToolPayablesBalance:    "mcp:report:money",
+	// Закупки раскрывают суммы по поставщикам — закрываем тем же money-правом (CCC-связка целиком).
+	ToolPurchasesReport: "mcp:report:money",
 	// Админ-инструменты: чтение журнала регистрации и резолв документов для аудита.
 	// Журнал содержит PII — отдельное чувствительное право, выдаётся только доверенным аккаунтам.
 	ToolEventLog:      "mcp:admin:eventlog",
@@ -493,6 +501,176 @@ func GetTools() []Tool {
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"inflow", "outflow", "net"}},
 						"description": "Measures to include (default: inflow, outflow, net). inflow/outflow are gross and positive; net = inflow - outflow.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+				"required": []string{"period"},
+			},
+		},
+		{
+			Name:        ToolReceivablesBalance,
+			Description: "Get accounts-receivable balances from customers (взаиморасчёты с покупателями) from the «Взаиморасчеты» register as of a given date, broken down by customer. The balance is shown EXPANDED, not netted: receivable (ДЗ — what customers owe us) and advance (авансы полученные — prepayments we still owe goods for) are returned as separate measures, split by the sign of each customer's net balance. Note: the register has no contract/order dimension, so a receivable and an advance of the SAME customer across different deals are already netted into one figure — expansion is across customers, not within one. Dimensions (group_by): customer, firm (default: customer). Measures: receivable, advance, net (= receivable - advance; >0 means the customer is a net debtor). Filters: customer_ids (UUIDs from resolve_customer — applied via IN HIERARCHY, accepts customer-group UUIDs), firm_ids (UA/PL legal entity — use group_by=[\"firm\"] to see the split and to exclude intra-group settlements when consolidating). Requires the mcp:report:money permission. Amounts are in the base currency. sort.field must be a selected dimension or measure.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date": map[string]any{
+						"type":        "string",
+						"format":      "date",
+						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"customer_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by customer IDs (from resolve_customer). Accepts both leaf and customer-group UUIDs — applied via IN HIERARCHY.",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a previous call with group_by=[\"firm\"] (there is no separate firm resolver).",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"customer", "firm"}},
+						"description": "Group results by dimensions (default: customer). firm = owning legal entity (UA/PL).",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"receivable", "advance", "net"}},
+						"description": "Measures to include (default: receivable, advance, net). receivable = ДЗ (customers owe us), advance = prepayments received (we owe goods), net = receivable - advance.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:        ToolPayablesBalance,
+			Description: "Get accounts-payable balances to suppliers (расчёты с поставщиками) from the «Взаиморасчеты» register as of a given date, broken down by supplier. Suppliers live in the same counterparty catalog as customers, so supplier UUIDs are resolved via resolve_customer. The balance is shown EXPANDED, not netted: payable (КЗ — what we owe suppliers) and advance (авансы выданные — prepayments we made that suppliers still owe goods for) are returned as separate measures, split by the sign of each supplier's net balance. Note: the register has no contract/order dimension, so a payable and an advance of the SAME supplier across different deals are already netted into one figure — expansion is across suppliers, not within one. Dimensions (group_by): supplier, firm (default: supplier). Measures: payable, advance, net (= payable - advance; >0 means we are a net debtor to the supplier). Filters: supplier_ids (UUIDs from resolve_customer — applied via IN HIERARCHY), firm_ids (UA/PL legal entity — use group_by=[\"firm\"] to see the split and exclude intra-group settlements when consolidating). Requires the mcp:report:money permission. Amounts are in the base currency. sort.field must be a selected dimension or measure.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date": map[string]any{
+						"type":        "string",
+						"format":      "date",
+						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"supplier_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by supplier IDs (from resolve_customer — suppliers share the counterparty catalog). Accepts both leaf and group UUIDs — applied via IN HIERARCHY.",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a previous call with group_by=[\"firm\"] (there is no separate firm resolver).",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"supplier", "firm"}},
+						"description": "Group results by dimensions (default: supplier). firm = owning legal entity (UA/PL).",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"payable", "advance", "net"}},
+						"description": "Measures to include (default: payable, advance, net). payable = КЗ (we owe suppliers), advance = prepayments issued (suppliers owe goods), net = payable - advance.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:        ToolPurchasesReport,
+			Description: "Get goods-purchase turnover (обороты поступления ТМЦ) from «ПриходнаяНакладная» documents for a period, broken down by supplier and month. Amounts are NET of returns (ВидОперации=Возврат is subtracted) and include VAT — the correct purchases base for a DPO denominator. Only posted documents are counted. Dimensions (group_by): supplier, firm, day, week, month (default: supplier, month; day/week/month return ISO date strings). Measures: amount (purchase sum incl. VAT), qty (default: amount). Filters: supplier_ids (UUIDs from resolve_customer — suppliers share the counterparty catalog; applied via IN HIERARCHY), firm_ids (UA/PL legal entity — group by firm to see the split / exclude intra-group purchases). Requires the mcp:report:money permission. Amounts are in the document currency. sort.field must be a selected dimension or measure.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Report period",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"supplier_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by supplier IDs (from resolve_customer). Accepts both leaf and group UUIDs — applied via IN HIERARCHY.",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a call with group_by=[\"firm\"] (there is no separate firm resolver).",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"supplier", "firm", "day", "week", "month"}},
+						"description": "Group results by dimensions (default: supplier, month). day/week/month bucket by document date.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty"}},
+						"description": "Measures to include (default: amount). amount = purchase sum incl. VAT, net of returns; qty = quantity, net of returns.",
 					},
 					"top": map[string]any{
 						"type":        "integer",

@@ -66,7 +66,7 @@ func main() {
 			RefreshTokenTTL: cfg.OAuth.RefreshTokenTTL,
 			AuthCodeTTL:     cfg.OAuth.AuthCodeTTL,
 			DefaultScopes:   cfg.OAuth.DefaultScopes,
-			SupportedScopes: cfg.OAuth.DefaultScopes,
+			SupportedScopes: cfg.OAuth.SupportedScopes,
 			DevAccessKey:    cfg.OAuth.DevAccessKey,
 			VerifyKey:       verifier.Verify,
 		}, storage, log)

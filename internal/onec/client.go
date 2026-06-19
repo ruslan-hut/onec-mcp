@@ -311,6 +311,33 @@ func (c *Client) StockReport(ctx context.Context, req *StockReportRequest) (*Sto
 	return &resp, nil
 }
 
+func (c *Client) Receivables(ctx context.Context, req *SettlementsRequest) (*SettlementsResponse, error) {
+	var resp SettlementsResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/receivables", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) Payables(ctx context.Context, req *SettlementsRequest) (*SettlementsResponse, error) {
+	var resp SettlementsResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/payables", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) Purchases(ctx context.Context, req *PurchasesRequest) (*PurchasesResponse, error) {
+	var resp PurchasesResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/purchases", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 // TopProducts / CustomerSummary возвращаются как json.RawMessage —
 // гейту достаточно прокинуть тело наверх, без декомпозиции в типизированную структуру.
 // Это позволяет добавлять поля в 1С-стороне без правки гейта.

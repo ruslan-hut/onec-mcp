@@ -77,8 +77,8 @@ type Period struct {
 }
 
 type SalesFilters struct {
-	CustomerIDs     []string `json:"customer_ids,omitempty"`
-	WarehouseIDs    []string `json:"warehouse_ids,omitempty"`
+	CustomerIDs  []string `json:"customer_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
 	// SalesChannelIDs — UUIDs элементов справочника SalesChannel. Применяется через IN HIERARCHY,
 	// поэтому можно передать как родительский узел (B2B) для агрегата по всем дочерним каналам,
 	// так и конкретный лист (B2B Online).
@@ -148,9 +148,11 @@ type ResolveCashResponse struct {
 // CashFilters — общий фильтр для денежных отчётов. CashIDs — UUID касс (resolve_cash);
 // для cash_flow применяется к измерению Счет, для cash_balance — к измерению Касса.
 // Остальные поля используются только в cash_flow (фильтры по измерениям ВидОперации и Аналитика):
-//   OperationIDs   — виды операций (resolve_operation), измерение ВидОперации;
-//   CostArticleIDs — статьи затрат (resolve_cost_article), аналитика, IN HIERARCHY;
-//   CustomerIDs    — контрагенты (resolve_customer), аналитика, IN.
+//
+//	OperationIDs   — виды операций (resolve_operation), измерение ВидОперации;
+//	CostArticleIDs — статьи затрат (resolve_cost_article), аналитика, IN HIERARCHY;
+//	CustomerIDs    — контрагенты (resolve_customer), аналитика, IN.
+//
 // CostArticleIDs и CustomerIDs объединяются по аналитике через OR.
 type CashFilters struct {
 	CashIDs        []string `json:"cash_ids,omitempty"`
@@ -215,6 +217,60 @@ type CustomerSummaryRequest struct {
 	CustomerID  string `json:"customer_id"`
 	Period      Period `json:"period"`
 	TopProducts int    `json:"top_products,omitempty"`
+}
+
+// SettlementsFilters — фильтр отчётов взаиморасчётов (receivables / payables).
+// CustomerIDs / SupplierIDs — UUID контрагентов (оба резолвятся через resolve_customer:
+// поставщики тоже лежат в справочнике Контрагенты). 1С берёт ключ по роли отчёта (customer_ids
+// для receivables, supplier_ids для payables), с запасным customer_ids. Применяется через IN HIERARCHY.
+// FirmIDs — UUID фирм (UA/PL юрлиц); измерение Фирма, применяется через IN. UUID фирмы можно взять
+// из group_by=["firm"] предыдущего вызова (отдельного резолвера фирм нет — их единицы).
+type SettlementsFilters struct {
+	CustomerIDs []string `json:"customer_ids,omitempty"`
+	SupplierIDs []string `json:"supplier_ids,omitempty"`
+	FirmIDs     []string `json:"firm_ids,omitempty"`
+}
+
+// SettlementsRequest — тело POST /mcp/reports/{receivables|payables}.
+// Развёрнутые остатки взаиморасчётов на дату по регистру «Взаиморасчеты».
+type SettlementsRequest struct {
+	Date     string             `json:"date,omitempty"`
+	Filters  SettlementsFilters `json:"filters,omitempty"`
+	GroupBy  []string           `json:"group_by,omitempty"`
+	Measures []string           `json:"measures,omitempty"`
+	Top      int                `json:"top,omitempty"`
+	Sort     []SortSpec         `json:"sort,omitempty"`
+}
+
+type SettlementsResponse struct {
+	Columns []Column               `json:"columns"`
+	Rows    [][]interface{}        `json:"rows"`
+	Totals  map[string]interface{} `json:"totals,omitempty"`
+}
+
+// PurchasesFilters — фильтр отчёта закупок (purchases_report).
+// SupplierIDs — UUID поставщиков (резолвятся через resolve_customer, IN HIERARCHY);
+// FirmIDs — UUID фирм (UA/PL), измерение Фирма, IN.
+type PurchasesFilters struct {
+	SupplierIDs []string `json:"supplier_ids,omitempty"`
+	FirmIDs     []string `json:"firm_ids,omitempty"`
+}
+
+// PurchasesRequest — тело POST /mcp/reports/purchases.
+// Обороты поступления ТМЦ за период по документу «ПриходнаяНакладная» (нетто возвратов).
+type PurchasesRequest struct {
+	Period   Period           `json:"period"`
+	Filters  PurchasesFilters `json:"filters,omitempty"`
+	GroupBy  []string         `json:"group_by,omitempty"`
+	Measures []string         `json:"measures,omitempty"`
+	Top      int              `json:"top,omitempty"`
+	Sort     []SortSpec       `json:"sort,omitempty"`
+}
+
+type PurchasesResponse struct {
+	Columns []Column               `json:"columns"`
+	Rows    [][]interface{}        `json:"rows"`
+	Totals  map[string]interface{} `json:"totals,omitempty"`
 }
 
 // AuthVerifyRequest — тело POST /mcp/auth/verify к 1С.

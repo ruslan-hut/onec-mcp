@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
       - name: Run tests
         run: go test -v ./...
@@ -90,6 +90,12 @@ jobs:
               - "mcp:resolve"
               - "mcp:report:sales"
               - "mcp:report:stock"
+            supported_scopes:
+              - "mcp:resolve"
+              - "mcp:report:sales"
+              - "mcp:report:stock"
+              - "mcp:report:money"
+              - "mcp:report:cost"
             dev_access_key: ""
             rate_limit:
               authorize_per_minute: 10
