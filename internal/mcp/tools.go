@@ -693,7 +693,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolEventLog,
-			Description: "Read the 1C event log (журнал регистрации). List events for a period filtered by severity and/or technical event type, and optionally by user or session — all filters are independent and optional, and the period defaults to the current day. Common questions: 'errors today' → level=[\"error\"]; 'all postings today' → events=[\"_$Data$_.Post\"]; 'logins today' → events=[\"_$Session$_.Start\"]; 'what did user X do' → user=\"X\". To reconstruct what led to an error: first call with level=[\"error\"] (and user, if known) to locate the failure — each event carries its session number and timestamp — then call again with that session number and no level filter to get the full chronological trace of that session up to the error. Events come back in chronological order (oldest first) with date, level, user, event (technical name like _$Data$_.Post), event_presentation, comment, metadata, object, session, transaction_status, computer. For the audit trail of one specific document or catalog item, use object_history instead. Requires the mcp:admin:eventlog permission (the log contains PII).",
+			Description: "Read the 1C event log (журнал регистрации). List events for a period filtered by severity and/or technical event type, and optionally by user or session — all filters are independent and optional, and the period defaults to the current day. Common questions: 'errors today' → level=[\"error\"]; 'all postings today' → events=[\"_$Data$_.Post\"]; 'logins today' → events=[\"_$Session$_.Start\"]; 'what did user X do' → user=\"X\". To reconstruct what led to an error: first call with level=[\"error\"] (and user, if known) to locate the failure — each event carries its session number and timestamp — then call again with that session number and no level filter to get the full chronological trace of that session up to the error. Events come back in chronological order (oldest first) with date, level, user, event (technical name like _$Data$_.Post), event_presentation, comment, metadata, object, session, transaction_status, computer. For the audit trail of one specific document or catalog item, use object_history instead. NOTE on attribution: each event belongs to the user who AUTHORED it in the log; background/scheduled jobs are recorded under a service user, not a document's 'responsible' person — so a user= filter can legitimately return nothing for changes actually made by a background process (use object_history, or a session filter, to see those). Requires the mcp:admin:eventlog permission (the log contains PII).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -717,10 +717,10 @@ func GetTools() []Tool {
 					},
 					"period": map[string]any{
 						"type":        "object",
-						"description": "Time window (defaults to the current day if omitted). If the result is capped by limit, the earliest events in the window are returned — narrow the period or add filters to see the rest.",
+						"description": "Time window (defaults to the current day if omitted). IMPORTANT for performance: on a busy base the log is huge and a whole-day scan can TIME OUT — if you know the approximate time (e.g. from object_history), pass a narrow time window. from/to accept a plain date OR a date-time. If the result is capped by limit, the earliest events in the window are returned.",
 						"properties": map[string]any{
-							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
-							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+							"from": map[string]any{"type": "string", "description": "Start: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"},
+							"to":   map[string]any{"type": "string", "description": "End: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS (a date with no time = end of that day)"},
 						},
 					},
 					"limit": map[string]any{
@@ -751,10 +751,10 @@ func GetTools() []Tool {
 					},
 					"period": map[string]any{
 						"type":        "object",
-						"description": "Time window (defaults to the current day if omitted)",
+						"description": "Time window (defaults to the current day if omitted). from/to accept a plain date (YYYY-MM-DD) or a date-time (YYYY-MM-DDTHH:MM:SS); a date with no time as 'to' means end of that day.",
 						"properties": map[string]any{
-							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
-							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+							"from": map[string]any{"type": "string", "description": "Start: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"},
+							"to":   map[string]any{"type": "string", "description": "End: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"},
 						},
 					},
 					"limit": map[string]any{
