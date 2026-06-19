@@ -379,6 +379,31 @@ Get available tools and their JSON schemas.
         "inputSchema": { ... }
       },
       {
+        "name": "cash_balance",
+        "description": "Cash-on-hand balance from ДеньгиВКассе as of a date, by cash desk...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "cash_flow",
+        "description": "Cash flow (turnovers) from ДвижениеДенежныхСредств for a period...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "receivables_balance",
+        "description": "Accounts-receivable balances from customers (ДЗ / advances), expanded...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "payables_balance",
+        "description": "Accounts-payable balances to suppliers (КЗ / advances), expanded...",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "purchases_report",
+        "description": "Goods-purchase turnover from ПриходнаяНакладная, net of returns, incl. VAT...",
+        "inputSchema": { ... }
+      },
+      {
         "name": "event_log",
         "description": "Read the 1C event log (журнал регистрации): errors/events for a period by level or type...",
         "inputSchema": { ... }
@@ -404,7 +429,7 @@ Get available tools and their JSON schemas.
 > granted. So the admin tools (`event_log`, `object_history`, `find_document`) appear only for
 > tokens carrying `mcp:admin:eventlog`, and `sales_report`'s `cost`/`profit`/`margin` measures are
 > stripped without `mcp:report:cost`. There are also tools not shown here (resolve
-> `sales_channel`/`cash`/`cost_article`/`operation`, reports `top_products`/`customer_summary`/`cash_balance`/`cash_flow`).
+> `sales_channel`/`cash`/`cost_article`/`operation`, reports `top_products`/`customer_summary`).
 
 ---
 
@@ -465,6 +490,103 @@ Execute a tool with arguments.
   "id": 3
 }
 ```
+
+---
+
+## Money Report Tools (cash, settlements & purchases)
+
+Five report tools gated by the **`mcp:report:money`** scope (they expose money figures). Like other
+report tools, the result `content[].text` is the standard report envelope — `{columns, rows, totals}`,
+same shape as `sales_report` / `stock_balance`. Amounts are in the base currency, except
+`purchases_report` (document currency) and `cash_balance` (each cash desk's own currency — see its
+note). For all of them, `sort.field` must be one of the selected `group_by` dimensions or `measures`.
+
+### `cash_balance`
+
+Cash-on-hand balance from the «ДеньгиВКассе» register as of a date, broken down by cash desk (касса).
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
+| `filters.cash_ids` | array | No | Cash desk UUIDs (from `resolve_cash`). |
+| `group_by` | array | No | `cash`, `firm` (default: `cash`). firm = owning company of the cash desk. |
+| `measures` | array | No | `balance` (default). |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
+
+> NOTE: amounts are in **each cash desk's own currency** (the register has no currency dimension);
+> the grand total simply sums them, so it is only meaningful when all selected cash desks share one
+> currency.
+
+### `cash_flow`
+
+Cash flow (turnovers) from the «ДвижениеДенежныхСредств» register for a **period**. Net of the base
+currency only (the register's duplicate management-accounting-currency row is excluded).
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
+| `filters.cash_ids` | array | No | Cash desk / bank account UUIDs (from `resolve_cash`); applied to the `account` dimension. |
+| `filters.operation_ids` | array | No | Operation type UUIDs (from `resolve_operation`); applied to the `ВидОперации` dimension. |
+| `filters.cost_article_ids` | array | No | Cost article UUIDs (from `resolve_cost_article`); filters the `analytics` dimension via IN HIERARCHY. Combined with `customer_ids` via OR. |
+| `filters.customer_ids` | array | No | Counterparty UUIDs (from `resolve_customer`); filters the `analytics` dimension. Combined with `cost_article_ids` via OR. |
+| `group_by` | array | No | `account`, `operation`, `analytics`, `firm`, `day`, `week`, `month` (default: `operation`). `analytics` is composite, returned as `{id,label,kind}`; day/week/month return ISO date strings. |
+| `measures` | array | No | `inflow` (gross in), `outflow` (gross out, positive), `net` (= inflow − outflow). Default: all three. |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
+
+`receivables_balance` and `payables_balance` read the «Взаиморасчеты» register **as of a date** and
+show the balance **expanded, not netted**: the receivable/payable and the advance are returned as
+separate measures, split by the sign of each counterparty's net balance. The register has no
+contract/order dimension, so for a single counterparty a receivable and an advance across different
+deals are already netted into one figure — expansion is across counterparties, not within one.
+Suppliers share the counterparty catalog with customers, so supplier UUIDs are resolved via
+`resolve_customer`. There is no firm resolver — obtain firm UUIDs from a prior call with
+`group_by=["firm"]`.
+
+### `receivables_balance`
+
+Accounts receivable from customers (ДЗ — what customers owe us) as of a date, broken down by customer.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
+| `filters.customer_ids` | array | No | Customer UUIDs (from `resolve_customer`); accepts customer-group UUIDs — applied via IN HIERARCHY. |
+| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `group_by` | array | No | `customer`, `firm` (default: `customer`). |
+| `measures` | array | No | `receivable` (ДЗ), `advance` (prepayments received), `net` (= receivable − advance). Default: all three. |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
+
+### `payables_balance`
+
+Accounts payable to suppliers (КЗ — what we owe suppliers) as of a date, broken down by supplier.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
+| `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer` — shared catalog); accepts group UUIDs — applied via IN HIERARCHY. |
+| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `group_by` | array | No | `supplier`, `firm` (default: `supplier`). |
+| `measures` | array | No | `payable` (КЗ), `advance` (prepayments issued), `net` (= payable − advance). Default: all three. |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
+
+### `purchases_report`
+
+Goods-purchase turnover from posted «ПриходнаяНакладная» documents for a **period**. Amounts are net
+of returns (`ВидОперации=Возврат` subtracted) and **include VAT** — the correct purchases base for a
+DPO denominator. Amounts are in the document currency.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
+| `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer`); accepts group UUIDs — applied via IN HIERARCHY. |
+| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `group_by` | array | No | `supplier`, `firm`, `day`, `week`, `month` (default: `supplier`, `month`; day/week/month return ISO date strings). |
+| `measures` | array | No | `amount` (sum incl. VAT, net of returns), `qty` (default: `amount`). |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
 
 ---
 
