@@ -47,6 +47,7 @@ oauth:
     - "mcp:report:stock"
     - "mcp:report:money"
     - "mcp:report:cost"
+    - "mcp:admin:eventlog"
   # Временный единый ключ для login-формы на этапе 1.
   # На этапе 2 заменится на вызов 1С /mcp/auth/verify с per-user ключами.
   dev_access_key: ""
