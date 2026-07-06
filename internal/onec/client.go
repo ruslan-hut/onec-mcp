@@ -16,21 +16,26 @@ import (
 )
 
 type Client struct {
-	httpClient    *http.Client
-	baseURL       string
-	authType      string
-	username      string
-	password      string
-	tenantHeader  string
-	defaultTenant string
-	logger        *slog.Logger
-	resolveCache  *resolveCache
+	httpClient       *http.Client
+	httpReportClient *http.Client
+	baseURL          string
+	authType         string
+	username         string
+	password         string
+	tenantHeader     string
+	defaultTenant    string
+	logger           *slog.Logger
+	resolveCache     *resolveCache
 }
 
 func NewClient(cfg *config.OneCConfig, logger *slog.Logger) *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout(),
+		},
+		// отдельный клиент для /mcp/reports/* — отчёты сканируют регистры и легально дольше резолвов
+		httpReportClient: &http.Client{
+			Timeout: cfg.ReportTimeout(),
 		},
 		baseURL:       cfg.BaseURL,
 		authType:      cfg.Auth.Type,
@@ -84,7 +89,14 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	start := time.Now()
 
-	resp, err := c.httpClient.Do(req)
+	// отчётные эндпойнты (/mcp/reports/*) идут через клиент с увеличенным таймаутом;
+	// резолвы/auth остаются на коротком таймауте, чтобы быстро падать при недоступности 1С
+	httpClient := c.httpClient
+	if strings.HasPrefix(path, "/mcp/reports/") {
+		httpClient = c.httpReportClient
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		c.logger.Error("1C request", "method", method, "path", path, "error", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("request failed: %w", err)

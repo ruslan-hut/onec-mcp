@@ -95,6 +95,11 @@ status_changed_at, markets[], eu_certification{code,label} } ] }`.
   (падение до окна), строк не имеет и не попадает в выдачу — ловить через resolve_product status.
 - **Гейт:** ✅ реализовано — tool `availability_report`, `ToolScopes: mcp:report:stock`,
   клиент `AvailabilityReport` → `/mcp/reports/availability`, ответ 1С пробрасывается as-is (RawMessage).
+- **Производительность (важно):** общий таймаут клиента к 1С был 8 с — для скана посуточного
+  регистра по всему ассортименту мало (падало `context deadline exceeded`). Исправлено:
+  (1) отчётные эндпойнты `/mcp/reports/*` идут через отдельный клиент с таймаутом
+  `report_timeout_ms` (по умолч. 45000); (2) в 1С из тяжёлого запроса убран join `Товар.Parent` -
+  группа добирается отдельным лёгким запросом только при `group_by=product_group`.
 
 Запрос:
 ```json

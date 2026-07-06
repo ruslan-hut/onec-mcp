@@ -4,7 +4,8 @@ server:
 
 onec:
   base_url: "https://1c.example.com/api"
-  timeout_ms: 8000
+  timeout_ms: 8000          # resolve_* / auth — быстрые вызовы
+  report_timeout_ms: 45000  # /mcp/reports/* — сканы регистров (availability и т.п.)
   auth:
     type: "basic"         # basic | bearer
     username: "mcp_user"

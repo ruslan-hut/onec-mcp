@@ -59,8 +59,12 @@ type ServerConfig struct {
 }
 
 type OneCConfig struct {
-	BaseURL            string     `yaml:"base_url"`
-	TimeoutMs          int        `yaml:"timeout_ms" env-default:"8000"`
+	BaseURL string `yaml:"base_url"`
+	// TimeoutMs — таймаут для быстрых вызовов (resolve_*, auth/verify).
+	TimeoutMs int `yaml:"timeout_ms" env-default:"8000"`
+	// ReportTimeoutMs — таймаут для отчётных эндпойнтов (/mcp/reports/*): они сканируют
+	// регистры и легально дольше резолвов (ТЗ availability_report допускает до 30 с).
+	ReportTimeoutMs    int        `yaml:"report_timeout_ms" env-default:"45000"`
 	Auth               AuthConfig `yaml:"auth"`
 	TenantHeader       string     `yaml:"tenant_header"`
 	DefaultTenant      string     `yaml:"default_tenant"`
@@ -80,6 +84,15 @@ type LimitsConfig struct {
 
 func (c *OneCConfig) Timeout() time.Duration {
 	return time.Duration(c.TimeoutMs) * time.Millisecond
+}
+
+// ReportTimeout — таймаут для отчётных эндпойнтов. Падает обратно на Timeout(),
+// если report_timeout_ms не задан (0), чтобы не обнулять таймаут при неполном конфиге.
+func (c *OneCConfig) ReportTimeout() time.Duration {
+	if c.ReportTimeoutMs <= 0 {
+		return c.Timeout()
+	}
+	return time.Duration(c.ReportTimeoutMs) * time.Millisecond
 }
 
 // ResolveCacheTTL — TTL для кэша resolve_* ответов. 0 (или отрицательное) отключает кэш.
