@@ -931,9 +931,40 @@ func stripCostMeasures(tools []Tool) {
 }
 
 func mapToStruct(m any, v any) error {
-	data, err := json.Marshal(m)
+	data, err := json.Marshal(unstringifyJSON(m))
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(data, v)
+}
+
+// unstringifyJSON рекурсивно заменяет строки, содержащие валидный JSON-объект или массив,
+// на распарсенное значение. Компенсирует LLM-клиентов, которые иногда сериализуют вложенные
+// аргументы (period, filters, sort) в строку — тогда прямой Unmarshal падает с
+// "cannot unmarshal string into Go struct field ...". Пустую строку / невалидный JSON не трогаем
+// (эти случаи по object-типам добираются толерантным UnmarshalJSON в onec.models).
+func unstringifyJSON(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			t[k] = unstringifyJSON(val)
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = unstringifyJSON(val)
+		}
+		return t
+	case string:
+		s := strings.TrimSpace(t)
+		if len(s) >= 2 && (s[0] == '{' || s[0] == '[') {
+			var parsed any
+			if json.Unmarshal([]byte(s), &parsed) == nil {
+				return unstringifyJSON(parsed)
+			}
+		}
+		return t
+	default:
+		return v
+	}
 }

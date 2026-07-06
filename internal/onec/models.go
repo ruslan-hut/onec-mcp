@@ -127,6 +127,18 @@ type Period struct {
 	To   string `json:"to"`
 }
 
+// UnmarshalJSON терпит тот же косяк LLM, что и фильтры: period может прийти объектом,
+// объектом-в-строке (двойное кодирование) или пустой строкой. Покрывает все отчёты с period.
+func (p *Period) UnmarshalJSON(data []byte) error {
+	type alias Period
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*p = Period(a)
+	return nil
+}
+
 type SalesFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
