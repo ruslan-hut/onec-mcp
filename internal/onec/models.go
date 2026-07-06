@@ -1,6 +1,35 @@
 package onec
 
-import "fmt"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// unmarshalObjectOrString парсит JSON-объект в out, но терпит частый косяк LLM в tool-calling:
+// вложенный объект filters приходит как JSON-СТРОКА (двойное кодирование) или как пустая строка "".
+// Объект → парсим строго; строка с валидным JSON-объектом → разворачиваем; ""/"{}"/невалидная
+// строка/null → оставляем out пустым (лучше отчёт без фильтра, чем упавший вызов).
+func unmarshalObjectOrString(data []byte, out any) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || s == "{}" {
+			return nil
+		}
+		_ = json.Unmarshal([]byte(s), out) // невалидную строку тихо игнорируем (пустой фильтр)
+		return nil
+	}
+	return json.Unmarshal(trimmed, out)
+}
 
 // APIError — структурированная ошибка от HTTP-сервиса 1С.
 // Если тело ответа парсится как {"error": "...", "message": "..."} — возвращается этот тип,
@@ -113,6 +142,16 @@ type SalesFilters struct {
 	ProductStatus []string `json:"product_status,omitempty"`
 }
 
+func (f *SalesFilters) UnmarshalJSON(data []byte) error {
+	type alias SalesFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = SalesFilters(a)
+	return nil
+}
+
 type SortSpec struct {
 	Field string `json:"field"`
 	Dir   string `json:"dir"`
@@ -147,6 +186,16 @@ type StockFilters struct {
 	ProductStatus []string `json:"product_status,omitempty"`
 }
 
+func (f *StockFilters) UnmarshalJSON(data []byte) error {
+	type alias StockFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = StockFilters(a)
+	return nil
+}
+
 type StockReportRequest struct {
 	Date     string       `json:"date,omitempty"`
 	Filters  StockFilters `json:"filters,omitempty"`
@@ -165,6 +214,16 @@ type StockReportResponse struct {
 type AvailabilityFilters struct {
 	ProductIDs   []string `json:"product_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+}
+
+func (f *AvailabilityFilters) UnmarshalJSON(data []byte) error {
+	type alias AvailabilityFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = AvailabilityFilters(a)
+	return nil
 }
 
 // AvailabilityReportRequest — out-of-stock дни из регистра ОстаткиТоваровПоДням.
