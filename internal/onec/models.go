@@ -50,15 +50,37 @@ type ResolveWarehouseResponse struct {
 	Candidates []WarehouseCandidate `json:"candidates"`
 }
 
+// CodeLabel — пара «стабильный код + человекочитаемая метка» для статусных атрибутов,
+// приходящих из 1С (status, eu_certification). Код стабилен для логики LLM, label — для показа.
+type CodeLabel struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+}
+
 type ProductCandidate struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
 	Code     string `json:"code,omitempty"`
 	Archived bool   `json:"archived"`
+	// Статусные атрибуты жизненного цикла позиции (Category Watchdog). Вычисляются на стороне
+	// 1С из реквизитов карточки; здесь только сквозной проброс. omitempty — старые сборки 1С
+	// их не отдают. Коды синхронны с хелперами CommonModules/MCP (BSL): ProductStatusInfo,
+	// ProductMarkets, ProductCertificationInfo.
+	Status          *CodeLabel `json:"status,omitempty"`            // new | active | phasing_out | excluded
+	StatusChangedAt string     `json:"status_changed_at,omitempty"` // дата последней смены статуса (регистр ProductStatus)
+	Markets         []string   `json:"markets,omitempty"`           // UA | EU | OTHER
+	EUCertification *CodeLabel `json:"eu_certification,omitempty"`  // certified | in_process | not_required
 }
 
 type ResolveProductResponse struct {
 	Candidates []ProductCandidate `json:"candidates"`
+}
+
+// ProductDetailsRequest — пакетная выдача статусных атрибутов номенклатуры.
+// Ответ 1С ({products:[...]}) пробрасывается как есть (json.RawMessage).
+type ProductDetailsRequest struct {
+	ProductIDs []string `json:"product_ids"`
+	Fields     []string `json:"fields,omitempty"`
 }
 
 type SalesChannelCandidate struct {
@@ -87,6 +109,8 @@ type SalesFilters struct {
 	// «Новый» = ДатаСоздания контрагента >= начало месяца, предшествующего PeriodBegin.
 	// Допустимо: "new" | "returning". Пустая строка / отсутствие = без фильтра.
 	CustomerCohort string `json:"customer_cohort,omitempty"`
+	// ProductStatus — фильтр по логическому статусу ЖЦ позиции (см. StockFilters.ProductStatus).
+	ProductStatus []string `json:"product_status,omitempty"`
 }
 
 type SortSpec struct {
@@ -117,6 +141,10 @@ type SalesReportResponse struct {
 type StockFilters struct {
 	ProductIDs   []string `json:"product_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// ProductStatus — фильтр по логическому статусу ЖЦ позиции (new|active|phasing_out|excluded).
+	// На стороне 1С разворачивается в пред-резолв ссылок товаров по статусу, а НЕ в условие на
+	// виртуальную таблицу Balance() — иначе теряется таблица итогов и Balance() уходит в таймаут.
+	ProductStatus []string `json:"product_status,omitempty"`
 }
 
 type StockReportRequest struct {
@@ -132,6 +160,23 @@ type StockReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+}
+
+type AvailabilityFilters struct {
+	ProductIDs   []string `json:"product_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+}
+
+// AvailabilityReportRequest — out-of-stock дни из регистра ОстаткиТоваровПоДням.
+// Ответ 1С ({columns, rows, totals, period, days, applied_filters}) пробрасывается как есть
+// (json.RawMessage), поэтому отдельной структуры ответа нет.
+type AvailabilityReportRequest struct {
+	Period   Period              `json:"period"`
+	Filters  AvailabilityFilters `json:"filters,omitempty"`
+	GroupBy  []string            `json:"group_by,omitempty"`
+	Measures []string            `json:"measures,omitempty"`
+	Top      int                 `json:"top,omitempty"`
+	Sort     []SortSpec          `json:"sort,omitempty"`
 }
 
 type CashCandidate struct {

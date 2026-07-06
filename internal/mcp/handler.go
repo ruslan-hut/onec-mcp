@@ -192,6 +192,10 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
 		result, err = h.callStockBalance(r, params.Arguments)
+	case ToolAvailabilityReport:
+		result, err = h.callAvailabilityReport(r, params.Arguments)
+	case ToolProductDetails:
+		result, err = h.callProductDetails(r, params.Arguments)
 	case ToolTopProducts:
 		result, err = h.callTopProducts(r, params.Arguments)
 	case ToolCustomerSummary:
@@ -722,6 +726,71 @@ func (h *Handler) callStockBalance(r *http.Request, args any) (*CallToolResult, 
 
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+type availabilityReportArgs struct {
+	Period   onec.Period              `json:"period"`
+	Filters  onec.AvailabilityFilters `json:"filters"`
+	GroupBy  []string                 `json:"group_by"`
+	Measures []string                 `json:"measures"`
+	Top      int                      `json:"top"`
+	Sort     []onec.SortSpec          `json:"sort"`
+}
+
+func (h *Handler) callAvailabilityReport(r *http.Request, args any) (*CallToolResult, error) {
+	var a availabilityReportArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
+		a.Top = h.cfg.Limits.MaxRows
+	}
+
+	req := &onec.AvailabilityReportRequest{
+		Period:   a.Period,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      a.Top,
+		Sort:     a.Sort,
+	}
+
+	// ответ 1С проброс as-is (RawMessage): помимо columns/rows/totals содержит period/days/applied_filters
+	resp, err := h.onecClient.AvailabilityReport(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type productDetailsArgs struct {
+	ProductIDs []string `json:"product_ids"`
+	Fields     []string `json:"fields"`
+}
+
+func (h *Handler) callProductDetails(r *http.Request, args any) (*CallToolResult, error) {
+	var a productDetailsArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.ProductDetailsRequest{
+		ProductIDs: a.ProductIDs,
+		Fields:     a.Fields,
+	}
+
+	resp, err := h.onecClient.ProductDetails(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
 }
 

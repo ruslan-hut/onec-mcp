@@ -4,8 +4,10 @@ const (
 	ToolResolveCustomer     = "resolve_customer"
 	ToolResolveWarehouse    = "resolve_warehouse"
 	ToolResolveProduct      = "resolve_product"
+	ToolProductDetails      = "product_details"
 	ToolSalesReport         = "sales_report"
 	ToolStockBalance        = "stock_balance"
+	ToolAvailabilityReport  = "availability_report"
 	ToolTopProducts         = "top_products"
 	ToolCustomerSummary     = "customer_summary"
 	ToolResolveSalesChannel = "resolve_sales_channel"
@@ -39,8 +41,10 @@ var ToolScopes = map[string]string{
 	ToolResolveCustomer:     "mcp:resolve",
 	ToolResolveWarehouse:    "mcp:resolve",
 	ToolResolveProduct:      "mcp:resolve",
+	ToolProductDetails:      "mcp:resolve",
 	ToolSalesReport:         "mcp:report:sales",
 	ToolStockBalance:        "mcp:report:stock",
+	ToolAvailabilityReport:  "mcp:report:stock",
 	ToolTopProducts:         "mcp:report:sales",
 	ToolCustomerSummary:     "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
@@ -109,7 +113,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolResolveProduct,
-			Description: "Search products by name or code (артикул). Returns a list of matching candidates for disambiguation. Pass a UUID directly to look up a known product. Set include_groups=true to also search the product catalog GROUPS (товарные группы) — UUIDs of groups can be passed to stock_balance.filters.product_ids or sales_report (via top_products) and will be applied via IN HIERARCHY (matches all products within the group).",
+			Description: "Search products by name or code (артикул). Returns a list of matching candidates for disambiguation. Pass a UUID directly to look up a known product. Set include_groups=true to also search the product catalog GROUPS (товарные группы) — UUIDs of groups can be passed to stock_balance.filters.product_ids or sales_report (via top_products) and will be applied via IN HIERARCHY (matches all products within the group). Each candidate also carries lifecycle fields: status {code,label} (new|active|phasing_out|excluded), status_changed_at (date), markets ([UA|EU|OTHER]) and eu_certification {code,label} (certified|in_process|not_required) — use them to tell an expected sales drop (product being phased out / withdrawn from a market) from an anomaly worth investigating.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -127,6 +131,26 @@ func GetTools() []Tool {
 					},
 				},
 				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        ToolProductDetails,
+			Description: "Batch-fetch lifecycle/status attributes for a list of products or product GROUPS in one call — use it to enrich many SKUs at once (e.g. a whole category) instead of calling resolve_product per item. product_ids accepts leaf product UUIDs and group UUIDs (from resolve_product with include_groups=true), expanded via IN HIERARCHY; up to 500 products are returned. For each product returns id, label, code, group {id,label}, status {code,label} (new|active|phasing_out|excluded), status_changed_at (date), markets ([UA|EU|OTHER]) and eu_certification {code,label} (certified|in_process|not_required). Use it in the weekly category report to classify each SKU's sales drop as expected (being phased out / withdrawn from a market) vs an anomaly.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"product_ids": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Product or group UUIDs (from resolve_product). Group UUIDs are expanded via IN HIERARCHY. Up to 500 products returned.",
+					},
+					"fields": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"label", "code", "group", "status", "status_changed_at", "markets", "eu_certification"}},
+						"description": "Optional subset of fields to return (id is always included). Default: all.",
+					},
+				},
+				"required": []string{"product_ids"},
 			},
 		},
 		{
@@ -193,6 +217,11 @@ func GetTools() []Tool {
 								"type":        "string",
 								"enum":        []string{"new", "returning"},
 								"description": "Restrict to new (customer created within or after the calendar month preceding period start) or returning customers. Omit to include both.",
+							},
+							"product_status": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string", "enum": []string{"new", "active", "phasing_out", "excluded"}},
+								"description": "Filter by product lifecycle status: new (Новинка), active (Активна), phasing_out (На виводі), excluded (Виведена). Lets you e.g. see sales only for products being phased out. Combine with resolve_product, which returns each product's current status.",
 							},
 						},
 					},
@@ -313,6 +342,11 @@ func GetTools() []Tool {
 								"items":       map[string]any{"type": "string"},
 								"description": "Filter by warehouse IDs (from resolve_warehouse)",
 							},
+							"product_status": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string", "enum": []string{"new", "active", "phasing_out", "excluded"}},
+								"description": "Filter by product lifecycle status: new (Новинка), active (Активна), phasing_out (На виводі), excluded (Виведена). E.g. product_status=[\"excluded\"] returns the frozen stock still sitting on withdrawn SKUs.",
+							},
 						},
 					},
 					"group_by": map[string]any{
@@ -341,6 +375,66 @@ func GetTools() []Tool {
 						},
 					},
 				},
+			},
+		},
+		{
+			Name:        ToolAvailabilityReport,
+			Description: "Get product availability (out-of-stock days) over a period from the daily stock register. For each SKU/group × warehouse (and optionally per week) returns oos_days (days out of stock), days (calendar days in the period), availability_pct (fraction 0..1 = in-stock days / days) and avg_qty (average daily balance). Use this to tell a demand-driven sales drop from a supply problem — 'was there simply nothing to sell?'. A day counts as out of stock when the end-of-day balance is <= 0. Items that were never stocked are excluded. Caveat: a SKU that was out of stock for the ENTIRE period (it dropped to zero before the window) has no rows and won't appear — combine with resolve_product status to spot active items with zero availability.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Reporting period (required)",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product). Leaf or group UUIDs — applied as IN HIERARCHY.",
+							},
+							"warehouse_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by warehouse IDs (from resolve_warehouse)",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"product", "product_group", "warehouse", "week"}},
+						"description": "Group results by dimensions. Default: product + warehouse. Use week to bucket metrics per ISO week; product_group aggregates by the parent товарная группа.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"oos_days", "days", "availability_pct", "avg_qty"}},
+						"description": "Measures to include (default: all)",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order (default: oos_days desc). sort.field must be one of the selected group_by dimensions or measures.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+				"required": []string{"period"},
 			},
 		},
 		{

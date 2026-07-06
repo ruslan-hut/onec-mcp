@@ -184,6 +184,12 @@ Content-Type: application/json
 | `candidates[].label` | string | Human-readable name |
 | `candidates[].code` | string | Артикул (optional) |
 | `candidates[].archived` | boolean | Archive status |
+| `candidates[].status` | object | Lifecycle `{code,label}`: `new`/`active`/`phasing_out`/`excluded` (optional) |
+| `candidates[].status_changed_at` | string | Last status-change date, YYYY-MM-DD (optional) |
+| `candidates[].markets` | array | Allowed markets, subset of `UA`/`EU`/`OTHER` (optional) |
+| `candidates[].eu_certification` | object | EU cert `{code,label}`: `certified`/`in_process`/`not_required` (optional) |
+
+> Lifecycle fields let a report separate an expected sales drop (product phased out / withdrawn from a market) from an anomaly. See `category-watchdog-contract.md` for the full contract.
 
 ---
 

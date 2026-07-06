@@ -13,6 +13,8 @@ The Go service acts as a gateway and expects 1C to provide three HTTP endpoints:
 | `POST /mcp/resolve/product` | Search products |
 | `POST /mcp/reports/sales` | Generate sales report |
 | `POST /mcp/reports/stock` | Stock balance report |
+| `POST /mcp/reports/availability` | Availability (out-of-stock days) report — see `category-watchdog-contract.md` |
+| `POST /mcp/reports/product_details` | Batch product status attributes — see `category-watchdog-contract.md` |
 | `POST /mcp/admin/eventlog` | Read the event log (журнал регистрации) — gated by `mcp:admin:eventlog` |
 | `POST /mcp/admin/find_document` | Resolve a document to its UUID — gated by `mcp:admin:eventlog` |
 
@@ -192,7 +194,11 @@ Content-Type: application/json
       "id": "p1q2r3s4-5678-90ab-cdef-123456789012",
       "label": "Gel polish No.42",
       "code": "GP-042",
-      "archived": false
+      "archived": false,
+      "status": { "code": "active", "label": "Активна" },
+      "status_changed_at": "2026-05-06",
+      "markets": ["UA", "EU", "OTHER"],
+      "eu_certification": { "code": "certified", "label": "Є" }
     }
   ]
 }
@@ -205,11 +211,17 @@ Content-Type: application/json
 | `candidates[].label` | string | Yes | Human-readable name |
 | `candidates[].code` | string | No | Артикул (product code) |
 | `candidates[].archived` | boolean | No | Whether product is archived |
+| `candidates[].status` | object | No | Жизненный цикл: `{code,label}`; code ∈ `new` \| `active` \| `phasing_out` \| `excluded` |
+| `candidates[].status_changed_at` | string | No | Дата последней смены статуса (YYYY-MM-DD); пусто, если статус не менялся с момента внедрения истории |
+| `candidates[].markets` | array | No | Разрешённые рынки: подмножество `UA` \| `EU` \| `OTHER` |
+| `candidates[].eu_certification` | object | No | Сертификация EU: `{code,label}`; code ∈ `certified` \| `in_process` \| `not_required` |
 
 ### Notes
 
 - Если `query` похож на UUID и соответствует существующему товару — возвращается один кандидат с этим UUID, без полнотекстового поиска.
 - Товары с пометкой `ДляПроизводства` исключаются на стороне 1С (внутренние/производственные позиции).
+- Статусные поля (`status` / `status_changed_at` / `markets` / `eu_certification`) вычисляются на стороне 1С из реквизитов карточки (хелперы `CommonModules/MCP`) — гейт их только пробрасывает. Старые сборки 1С поля не отдают (все `omitempty`).
+- Временная логика `markets` (до согласования точной): `ДоставкаЗаГраницуЗапрещена=Истина → ["UA"]`, иначе `["UA","EU","OTHER"]`.
 
 ---
 
@@ -324,7 +336,8 @@ Content-Type: application/json
   "date": "2025-12-31",
   "filters": {
     "product_ids": ["p1q2r3s4-5678-90ab-cdef-123456789012"],
-    "warehouse_ids": ["a1b2c3d4-5678-90ab-cdef-123456789012"]
+    "warehouse_ids": ["a1b2c3d4-5678-90ab-cdef-123456789012"],
+    "product_status": ["excluded"]
   },
   "group_by": ["warehouse", "product"],
   "measures": ["qty", "amount"],
@@ -340,6 +353,7 @@ Content-Type: application/json
 | `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment on the 1C side. |
 | `filters.product_ids` | array | No | Filter by product GUIDs |
 | `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
+| `filters.product_status` | array | No | Фильтр по статусу ЖЦ: подмножество `new` \| `active` \| `phasing_out` \| `excluded`. На 1С разворачивается в пред-резолв ссылок по статусу (не условие на `Balance()`). |
 | `group_by` | array | No | Grouping dimensions |
 | `measures` | array | No | Measures to calculate |
 | `top` | integer | No | Max rows to return |

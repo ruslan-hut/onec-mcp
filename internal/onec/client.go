@@ -311,6 +311,24 @@ func (c *Client) StockReport(ctx context.Context, req *StockReportRequest) (*Sto
 	return &resp, nil
 }
 
+func (c *Client) AvailabilityReport(ctx context.Context, req *AvailabilityReportRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/availability", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func (c *Client) ProductDetails(ctx context.Context, req *ProductDetailsRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/product_details", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
 func (c *Client) Receivables(ctx context.Context, req *SettlementsRequest) (*SettlementsResponse, error) {
 	var resp SettlementsResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/receivables", req, &resp); err != nil {
