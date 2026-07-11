@@ -216,28 +216,67 @@ func (s *Server) verifyAccessKey(ctx context.Context, key string) (*UserInfo, er
 	return nil, errors.New("invalid access key")
 }
 
+// loginTemplate — форма ввода ключа. Имя базы — главный элемент страницы: пользователь может
+// держать коннекторы к нескольким базам, и ключ от одной не подойдёт к другой. Рядом со слагом,
+// чтобы можно было сверить его с URL коннектора и заметить, что открылась не та база.
 var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MCP Authorization</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.TenantName}} — MCP Authorization</title>
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 420px; margin: 80px auto; padding: 0 16px; color: #222; }
-h1 { font-size: 20px; margin-bottom: 8px; }
-p.sub { color: #666; margin-top: 0; font-size: 14px; }
-form { display: flex; flex-direction: column; gap: 12px; margin-top: 24px; }
-label { font-size: 13px; color: #444; }
-input[type=password] { padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; font-family: ui-monospace, monospace; }
-button { padding: 10px; background: #111; color: #fff; border: 0; border-radius: 6px; font-size: 14px; cursor: pointer; }
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 440px;
+       margin: 72px auto; padding: 0 16px; color: #1a1a1a; background: #fff; }
+h1 { font-size: 19px; margin: 0 0 20px; }
+.db { border: 1px solid #e5e5e5; border-left: 4px solid #0b5fff; border-radius: 8px;
+      padding: 14px 16px; background: #fafafa; }
+.db-label { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: .06em; color: #777; margin-bottom: 4px; }
+.db-name { display: block; font-size: 22px; font-weight: 650; line-height: 1.25;
+           word-break: break-word; }
+.db-slug { display: inline-block; margin-top: 8px; font-family: ui-monospace, SFMono-Regular, monospace;
+           font-size: 12px; color: #555; background: #ececf0; padding: 2px 7px; border-radius: 4px; }
+p.sub { color: #666; font-size: 14px; margin: 16px 0 0; }
+.client { font-weight: 600; color: #1a1a1a; }
+form { display: flex; flex-direction: column; gap: 8px; margin-top: 24px; }
+label { font-size: 13px; font-weight: 500; }
+input[type=password] { padding: 10px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px;
+                       font-family: ui-monospace, SFMono-Regular, monospace; background: #fff;
+                       color: inherit; width: 100%; }
+input[type=password]:focus { outline: 2px solid #0b5fff; outline-offset: -1px; border-color: #0b5fff; }
+button { margin-top: 8px; padding: 11px; background: #111; color: #fff; border: 0; border-radius: 6px;
+         font-size: 14px; font-weight: 500; cursor: pointer; }
 button:hover { background: #333; }
-.err { color: #b00020; font-size: 13px; }
-.client { font-size: 13px; color: #555; }
+.err { background: #fce8e6; color: #a50e0e; padding: 10px 12px; border-radius: 6px;
+       font-size: 13px; margin: 16px 0 0; }
+@media (prefers-color-scheme: dark) {
+  body { background: #16181c; color: #e8e8e8; }
+  .db { background: #1e2127; border-color: #2c2f36; border-left-color: #4c8dff; }
+  .db-label { color: #999; }
+  .db-slug { background: #2c2f36; color: #b5b5b5; }
+  .client { color: #e8e8e8; }
+  input[type=password] { background: #1e2127; border-color: #3a3f48; }
+  .err { background: #3a1f1d; color: #f2b8b5; }
+}
 </style>
 </head>
 <body>
 <h1>Authorize MCP access</h1>
-<p class="sub">Application <span class="client">{{.ClientName}}</span> wants to access database <span class="client">{{.TenantName}}</span> via MCP.</p>
+
+<div class="db">
+  <span class="db-label">1C database</span>
+  <span class="db-name">{{.TenantName}}</span>
+  <span class="db-slug">{{.Tenant}}</span>
+</div>
+
+<p class="sub">Application <span class="client">{{.ClientName}}</span> is requesting access to this
+database. Enter the MCP key issued for it — a key from another database will not work here.</p>
+
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+
 <form method="POST" action="{{.ActionURL}}">
   <label for="access_key">MCP access key</label>
   <input id="access_key" name="access_key" type="password" autocomplete="off" autofocus required>
@@ -281,12 +320,14 @@ func (s *Server) renderLogin(w http.ResponseWriter, req authorizeRequest, client
 		Error      string
 		ClientName string
 		TenantName string
+		Tenant     string
 		ActionURL  string
 	}{
 		Req:        req,
 		Error:      errMsg,
 		ClientName: clientName,
 		TenantName: s.cfg.TenantName,
+		Tenant:     s.cfg.Tenant,
 		ActionURL:  s.authorizeEndpoint(),
 	}
 	_ = loginTemplate.Execute(w, data)
