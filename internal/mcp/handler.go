@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,9 @@ import (
 	"example.com/mcp-sales-mvp/internal/onec"
 )
 
+// Handler обслуживает /{tenant}/mcp одной базы: onecClient уже указывает на нужную 1С,
+// bearerToken — статический токен этой базы (пусто, когда включён OAuth и аутентификацию
+// делает внешний middleware). cfg нужен только ради общих лимитов.
 type Handler struct {
 	onecClient  *onec.Client
 	cfg         *config.Config
@@ -20,12 +24,12 @@ type Handler struct {
 	bearerToken string
 }
 
-func NewHandler(onecClient *onec.Client, cfg *config.Config, logger *slog.Logger) *Handler {
+func NewHandler(onecClient *onec.Client, cfg *config.Config, bearerToken string, logger *slog.Logger) *Handler {
 	return &Handler{
 		onecClient:  onecClient,
 		cfg:         cfg,
 		logger:      logger,
-		bearerToken: cfg.MCP.BearerToken,
+		bearerToken: bearerToken,
 	}
 }
 
@@ -74,7 +78,7 @@ func (h *Handler) authenticate(r *http.Request) bool {
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return false
 	}
-	return parts[1] == h.bearerToken
+	return subtle.ConstantTimeCompare([]byte(parts[1]), []byte(h.bearerToken)) == 1
 }
 
 func (h *Handler) writeResponse(w http.ResponseWriter, resp *Response) {

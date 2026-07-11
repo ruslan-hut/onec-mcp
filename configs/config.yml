@@ -2,16 +2,16 @@ server:
   host: 0.0.0.0
   port: 8088
 
-onec:
-  base_url: "https://1c.example.com/api"
-  timeout_ms: 8000          # resolve_* / auth — быстрые вызовы
-  report_timeout_ms: 45000  # /mcp/reports/* — сканы регистров (availability и т.п.)
-  auth:
-    type: "basic"         # basic | bearer
-    username: "mcp_user"
-    password: "secret"
-  tenant_header: "X-Tenant"
-  default_tenant: "main"
+# Единый SQLite: и настройки баз 1С, и OAuth-клиенты/токены. Один файл = один бэкап.
+database:
+  path: "data/onec-mcp.db"
+
+# Веб-интерфейс /admin, где заводятся и правятся базы 1С. Учётка только здесь:
+# в БД лежат базы, а не администраторы.
+admin:
+  enabled: true
+  username: "admin"
+  password: "change-me"
 
 limits:
   resolve_limit: 10
@@ -19,18 +19,17 @@ limits:
 
 mcp:
   enabled: true
-  bearer_token: "your-secret-token"
-
-api:
-  bearer_token: "your-api-token"
 
 # OAuth 2.1 AS+RS встроенный в гейт. Включай при подключении к Claude/ChatGPT как custom connector.
-# При enabled=true /mcp защищается OAuth Bearer (статический mcp.bearer_token игнорируется).
+# При enabled=true /{slug}/mcp защищается OAuth Bearer (статический mcp_token базы игнорируется).
+#
+# AS поднимается по одному на базу:
+#   issuer   = public_url + "/" + slug          (https://onec.nomadus.net/tenant1)
+#   resource = issuer + "/mcp"                  (https://onec.nomadus.net/tenant1/mcp)
+# Токен, выпущенный для одной базы, не пройдёт audience-проверку на другой.
 oauth:
   enabled: false
-  public_url: "https://mcp.example.com"        # внешний URL гейта без trailing slash
-  resource: ""                                  # пусто = public_url + "/mcp"
-  db_path: "data/oauth.db"
+  public_url: "https://onec.nomadus.net"   # КОРНЕВОЙ внешний URL гейта, без слага и без trailing slash
   access_token_ttl: "1h"
   refresh_token_ttl: "720h"
   auth_code_ttl: "10m"
@@ -41,7 +40,7 @@ oauth:
     - "mcp:report:stock"
   # supported_scopes — полный список анонсируемых/допустимых scope. Должен включать ВСЕ scope из
   # ToolScopes, иначе соответствующие инструменты режутся при DCR-регистрации до выпуска токена.
-  # Пусто = берётся из default_scopes.
+  # Пусто = берётся из default_scopes. Любая база может переопределить оба списка в /admin.
   supported_scopes:
     - "mcp:resolve"
     - "mcp:report:sales"
@@ -49,11 +48,12 @@ oauth:
     - "mcp:report:money"
     - "mcp:report:cost"
     - "mcp:admin:eventlog"
-  # Временный единый ключ для login-формы на этапе 1.
-  # На этапе 2 заменится на вызов 1С /mcp/auth/verify с per-user ключами.
-  dev_access_key: ""
-  # Per-IP лимиты на минуту, 0 = отключено. Защита от brute-force ключей.
+  # Per-IP лимиты на минуту, 0 = отключено. Защита от brute-force ключей. Общие для всех баз.
   rate_limit:
     authorize_per_minute: 10
     register_per_minute: 30
     token_per_minute: 120
+
+# Баз 1С в конфиге нет — они хранятся в SQLite и заводятся через /admin.
+# На чистой БД гейт поднимется без единого маршрута, кроме /health и /admin: это нормально,
+# первым шагом надо зайти в /admin и добавить базу.

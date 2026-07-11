@@ -6,54 +6,33 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 var ErrNotFound = errors.New("oauth: not found")
 
-// Storage — обёртка над SQLite для OAuth-сущностей.
+// Storage — OAuth-сущности поверх общего SQLite-хендла гейта (см. internal/store).
 // Используется на всех путях AS (register/authorize/token) и RS (валидация токена).
+// Владение соединением остаётся за вызывающим — Close здесь нет.
 type Storage struct {
 	db *sql.DB
 }
 
-// NewStorage открывает БД (создавая директорию при необходимости) и запускает миграции.
-func NewStorage(path string) (*Storage, error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := ensureDir(dir); err != nil {
-			return nil, fmt.Errorf("oauth: ensure dir: %w", err)
-		}
-	}
-
-	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("oauth: open db: %w", err)
-	}
-
-	// Один writer для избежания "database is locked" на SQLite WAL под нагрузкой.
-	db.SetMaxOpenConns(1)
-
+// NewStorage прогоняет миграции OAuth-таблиц на уже открытом соединении.
+func NewStorage(db *sql.DB) (*Storage, error) {
 	s := &Storage{db: db}
 	if err := s.migrate(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
-}
-
-func (s *Storage) Close() error {
-	return s.db.Close()
 }
 
 func (s *Storage) migrate() error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS oauth_clients (
 			client_id TEXT PRIMARY KEY,
+			tenant TEXT NOT NULL DEFAULT '',
 			redirect_uris TEXT NOT NULL,
 			client_name TEXT,
 			token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
@@ -64,6 +43,7 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS auth_codes (
 			code TEXT PRIMARY KEY,
+			tenant TEXT NOT NULL DEFAULT '',
 			client_id TEXT NOT NULL,
 			redirect_uri TEXT NOT NULL,
 			code_challenge TEXT NOT NULL,
@@ -75,6 +55,7 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS access_tokens (
 			token TEXT PRIMARY KEY,
+			tenant TEXT NOT NULL DEFAULT '',
 			client_id TEXT NOT NULL,
 			sub TEXT NOT NULL,
 			scope TEXT NOT NULL,
@@ -84,6 +65,7 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,
+			tenant TEXT NOT NULL DEFAULT '',
 			client_id TEXT NOT NULL,
 			sub TEXT NOT NULL,
 			scope TEXT NOT NULL,
@@ -101,6 +83,43 @@ func (s *Storage) migrate() error {
 		if _, err := s.db.Exec(q); err != nil {
 			return fmt.Errorf("oauth: migrate %q: %w", q, err)
 		}
+	}
+
+	// Досыпаем tenant в БД, созданные до мультитенантности. Старые строки получают tenant=''
+	// и не совпадут ни с одним слагом — то есть выпущенные до апгрейда токены становятся
+	// невалидными, а клиентов Claude/ChatGPT надо переподключить. Это осознанное решение.
+	for _, table := range []string{"oauth_clients", "auth_codes", "access_tokens", "refresh_tokens"} {
+		if err := s.addColumnIfMissing(table, "tenant", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumnIfMissing — идемпотентный ALTER TABLE: SQLite не умеет ADD COLUMN IF NOT EXISTS,
+// поэтому сначала смотрим в PRAGMA table_info.
+func (s *Storage) addColumnIfMissing(table, column, decl string) error {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("oauth: inspect %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("oauth: inspect %s: %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("oauth: inspect %s: %w", table, err)
+	}
+
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl)); err != nil {
+		return fmt.Errorf("oauth: add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -123,26 +142,28 @@ func (s *Storage) CreateClient(ctx context.Context, c *Client) error {
 
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO oauth_clients
-			(client_id, redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types, scope, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ClientID, string(redirects), c.ClientName, c.TokenEndpointAuthMethod,
+			(client_id, tenant, redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types, scope, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ClientID, c.Tenant, string(redirects), c.ClientName, c.TokenEndpointAuthMethod,
 		string(grants), string(responses), c.Scope, c.CreatedAt.Unix(),
 	)
 	return err
 }
 
-func (s *Storage) GetClient(ctx context.Context, clientID string) (*Client, error) {
+// GetClient — клиент виден только внутри своей базы: client_id, зарегистрированный
+// в другом тенанте, вернёт ErrNotFound.
+func (s *Storage) GetClient(ctx context.Context, tenant, clientID string) (*Client, error) {
 	var (
-		c                                                                   Client
-		redirects, grants, responses                                        string
-		createdAt                                                           int64
-		clientName, scope, tokenEndpointAuthMethod                          sql.NullString
+		c                                          Client
+		redirects, grants, responses               string
+		createdAt                                  int64
+		clientName, scope, tokenEndpointAuthMethod sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT client_id, redirect_uris, client_name, token_endpoint_auth_method,
+		`SELECT client_id, tenant, redirect_uris, client_name, token_endpoint_auth_method,
 		        grant_types, response_types, scope, created_at
-		 FROM oauth_clients WHERE client_id = ?`, clientID,
-	).Scan(&c.ClientID, &redirects, &clientName, &tokenEndpointAuthMethod,
+		 FROM oauth_clients WHERE client_id = ? AND tenant = ?`, clientID, tenant,
+	).Scan(&c.ClientID, &c.Tenant, &redirects, &clientName, &tokenEndpointAuthMethod,
 		&grants, &responses, &scope, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -168,18 +189,18 @@ func (s *Storage) GetClient(ctx context.Context, clientID string) (*Client, erro
 func (s *Storage) CreateAuthCode(ctx context.Context, a *AuthCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO auth_codes
-			(code, client_id, redirect_uri, code_challenge, code_challenge_method,
+			(code, tenant, client_id, redirect_uri, code_challenge, code_challenge_method,
 			 sub, scope, resource, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.Code, a.ClientID, a.RedirectURI, a.CodeChallenge, a.CodeChallengeMethod,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Code, a.Tenant, a.ClientID, a.RedirectURI, a.CodeChallenge, a.CodeChallengeMethod,
 		a.Sub, a.Scope, a.Resource, a.ExpiresAt.Unix(),
 	)
 	return err
 }
 
 // ConsumeAuthCode — атомарно достаёт и удаляет код (одноразовое использование).
-// Если код не найден или истёк — ErrNotFound.
-func (s *Storage) ConsumeAuthCode(ctx context.Context, code string) (*AuthCode, error) {
+// Если код не найден, принадлежит другой базе или истёк — ErrNotFound.
+func (s *Storage) ConsumeAuthCode(ctx context.Context, tenant, code string) (*AuthCode, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -192,10 +213,10 @@ func (s *Storage) ConsumeAuthCode(ctx context.Context, code string) (*AuthCode, 
 		resource  sql.NullString
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT code, client_id, redirect_uri, code_challenge, code_challenge_method,
+		`SELECT code, tenant, client_id, redirect_uri, code_challenge, code_challenge_method,
 		        sub, scope, resource, expires_at
-		 FROM auth_codes WHERE code = ?`, code,
-	).Scan(&a.Code, &a.ClientID, &a.RedirectURI, &a.CodeChallenge, &a.CodeChallengeMethod,
+		 FROM auth_codes WHERE code = ? AND tenant = ?`, code, tenant,
+	).Scan(&a.Code, &a.Tenant, &a.ClientID, &a.RedirectURI, &a.CodeChallenge, &a.CodeChallengeMethod,
 		&a.Sub, &a.Scope, &resource, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -224,15 +245,16 @@ func (s *Storage) ConsumeAuthCode(ctx context.Context, code string) (*AuthCode, 
 
 func (s *Storage) CreateAccessToken(ctx context.Context, t *AccessToken) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO access_tokens (token, client_id, sub, scope, resource, expires_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.Token, t.ClientID, t.Sub, t.Scope, t.Resource, t.ExpiresAt.Unix(), t.CreatedAt.Unix(),
+		`INSERT INTO access_tokens (token, tenant, client_id, sub, scope, resource, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.Token, t.Tenant, t.ClientID, t.Sub, t.Scope, t.Resource, t.ExpiresAt.Unix(), t.CreatedAt.Unix(),
 	)
 	return err
 }
 
-// GetActiveAccessToken — lookup токена с проверкой expiry. Возвращает ErrNotFound, если истёк/не найден.
-func (s *Storage) GetActiveAccessToken(ctx context.Context, token string) (*AccessToken, error) {
+// GetActiveAccessToken — lookup токена в пределах базы, с проверкой expiry.
+// ErrNotFound, если токен истёк, не найден или выпущен для другой базы.
+func (s *Storage) GetActiveAccessToken(ctx context.Context, tenant, token string) (*AccessToken, error) {
 	var (
 		t         AccessToken
 		expiresAt int64
@@ -240,9 +262,9 @@ func (s *Storage) GetActiveAccessToken(ctx context.Context, token string) (*Acce
 		resource  sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT token, client_id, sub, scope, resource, expires_at, created_at
-		 FROM access_tokens WHERE token = ?`, token,
-	).Scan(&t.Token, &t.ClientID, &t.Sub, &t.Scope, &resource, &expiresAt, &createdAt)
+		`SELECT token, tenant, client_id, sub, scope, resource, expires_at, created_at
+		 FROM access_tokens WHERE token = ? AND tenant = ?`, token, tenant,
+	).Scan(&t.Token, &t.Tenant, &t.ClientID, &t.Sub, &t.Scope, &resource, &expiresAt, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -262,17 +284,18 @@ func (s *Storage) GetActiveAccessToken(ctx context.Context, token string) (*Acce
 
 func (s *Storage) CreateRefreshToken(ctx context.Context, t *RefreshToken) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO refresh_tokens (token, client_id, sub, scope, resource, rotated_from, revoked, expires_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.Token, t.ClientID, t.Sub, t.Scope, t.Resource, t.RotatedFrom, boolToInt(t.Revoked),
+		`INSERT INTO refresh_tokens (token, tenant, client_id, sub, scope, resource, rotated_from, revoked, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.Token, t.Tenant, t.ClientID, t.Sub, t.Scope, t.Resource, t.RotatedFrom, boolToInt(t.Revoked),
 		t.ExpiresAt.Unix(), t.CreatedAt.Unix(),
 	)
 	return err
 }
 
-// ConsumeRefreshToken — атомарно проверяет refresh, помечает revoked и возвращает данные для выпуска новой пары.
-// Если токен уже revoked (replay-атака) — возвращает ErrNotFound, чтобы клиент получил 400 и переаутентифицировался.
-func (s *Storage) ConsumeRefreshToken(ctx context.Context, token string) (*RefreshToken, error) {
+// ConsumeRefreshToken — атомарно проверяет refresh в пределах базы, помечает revoked и возвращает
+// данные для выпуска новой пары. Если токен уже revoked (replay-атака), истёк или принадлежит другой
+// базе — ErrNotFound, чтобы клиент получил 400 и переаутентифицировался.
+func (s *Storage) ConsumeRefreshToken(ctx context.Context, tenant, token string) (*RefreshToken, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -288,9 +311,9 @@ func (s *Storage) ConsumeRefreshToken(ctx context.Context, token string) (*Refre
 		rotatedFrom sql.NullString
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT token, client_id, sub, scope, resource, rotated_from, revoked, expires_at, created_at
-		 FROM refresh_tokens WHERE token = ?`, token,
-	).Scan(&t.Token, &t.ClientID, &t.Sub, &t.Scope, &resource, &rotatedFrom, &revoked, &expiresAt, &createdAt)
+		`SELECT token, tenant, client_id, sub, scope, resource, rotated_from, revoked, expires_at, created_at
+		 FROM refresh_tokens WHERE token = ? AND tenant = ?`, token, tenant,
+	).Scan(&t.Token, &t.Tenant, &t.ClientID, &t.Sub, &t.Scope, &resource, &rotatedFrom, &revoked, &expiresAt, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

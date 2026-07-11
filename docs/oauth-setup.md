@@ -76,23 +76,20 @@ server:
   host: 0.0.0.0
   port: 8088
 
-onec:
-  base_url: "https://1c.example.com"        # БЕЗ /mcp в конце — добавится автоматически
-  timeout_ms: 8000
-  auth:
-    type: "basic"
-    username: "<1c-service-user>"            # отдельный пользователь 1С под гейт
-    password: "<1c-service-password>"
+database:
+  path: "data/onec-mcp.db"                   # базы 1С + OAuth-клиенты/токены, один файл
+
+admin:
+  enabled: true
+  username: "<admin-login>"
+  password: "<admin-password>"
 
 mcp:
   enabled: true
-  bearer_token: ""                            # пустой — при OAuth не нужен
 
 oauth:
   enabled: true
-  public_url: "https://mcp.example.com"      # внешний HTTPS URL гейта
-  resource: ""                                # пусто = public_url + "/mcp"
-  db_path: "data/oauth.db"
+  public_url: "https://onec.nomadus.net"     # КОРНЕВОЙ внешний HTTPS URL гейта, без слага
   access_token_ttl: "1h"
   refresh_token_ttl: "720h"                  # 30 дней
   auth_code_ttl: "10m"
@@ -100,19 +97,59 @@ oauth:
     - "mcp:resolve"
     - "mcp:report:sales"
     - "mcp:report:stock"
-  dev_access_key: ""                          # пусто в проде
   rate_limit:
     authorize_per_minute: 10
     register_per_minute: 30
     token_per_minute: 120
 ```
 
+**Баз 1С в конфиге нет.** Они лежат в SQLite и заводятся через веб-интерфейс `/admin` —
+там задаются слаг, адрес и учётка 1С, таймауты, токены и переопределения scope.
+На чистой БД гейт поднимется без единого маршрута, кроме `/health` и `/admin`: это нормально,
+первым шагом надо зайти в `/admin` и добавить базу.
+
+### Заведение базы через /admin
+
+1. Открыть `https://onec.nomadus.net/admin`, войти с логином/паролем из конфига.
+2. **Добавить базу**: слаг (`[a-z0-9-]`, не `health` / `admin` / `mcp` / `oauth` / `.well-known`),
+   имя (его увидит пользователь на форме авторизации), адрес 1С **без `/mcp` в конце**,
+   имя и пароль пользователя 1С (авторизация всегда Basic).
+3. Сохранить. Изменения применяются сразу, перезапуск не нужен: роутер резолвит слаги через
+   реестр, который перечитывается после каждой правки.
+
+Слаг после создания **не меняется**: он зашит в URL коннекторов, в OAuth issuer и в привязку
+всех уже выпущенных токенов. Нужен другой слаг — заводится новая база.
+
+Флажок «Включена» — быстрый способ отрезать доступ к базе, не удаляя настройки: выключенная
+база не отдаёт ни одного маршрута.
+
+### Несколько баз
+
+Слаг каждой базы попадает первым сегментом в путь и в OAuth issuer:
+
+| Что | Значение для слага `tenant1` |
+|---|---|
+| MCP endpoint (его вводит пользователь в Claude) | `https://onec.nomadus.net/tenant1/mcp` |
+| OAuth issuer | `https://onec.nomadus.net/tenant1` |
+| Token audience (`resource`) | `https://onec.nomadus.net/tenant1/mcp` |
+| Метаданные ресурса | `https://onec.nomadus.net/.well-known/oauth-protected-resource/tenant1/mcp` |
+| Метаданные AS | `https://onec.nomadus.net/.well-known/oauth-authorization-server/tenant1` |
+
+Базы изолированы на трёх уровнях: свой `onec.Client` (свои креды и свой кэш резолвов),
+свой кэш верификации ключей (ключ из одной 1С не откроет другую базу), и колонка `tenant`
+в SQLite — клиенты, коды и токены одной базы не видны из другой. Плюс audience-проверка:
+токен `tenant1` получит 401 `audience_mismatch` на `/tenant2/mcp`.
+
+Скоупы задаются глобально в `oauth.default_scopes` / `oauth.supported_scopes` и при
+необходимости переопределяются у базы в `/admin`.
+
 ### Что проверить перед стартом
 
-- `public_url` — это адрес, по которому MCP-клиент (Claude/ChatGPT) ходит на гейт; **обязательно HTTPS** в проде (ChatGPT не принимает HTTP).
-- 1С `base_url` доступен из гейта; гейт-к-1С — Basic auth.
-- `data/` — директория должна быть писмо-доступна процессу гейта; гейт создаст её сам.
-- Резервная копия `data/oauth.db` имеет смысл (там зарегистрированные клиенты и активные токены), но потеря её просто заставит пользователей пере-логиниться.
+- `public_url` — **корневой** адрес гейта, БЕЗ слага; слаг добавляется автоматически. Обязательно HTTPS в проде (ChatGPT не принимает HTTP).
+- `admin.username` / `admin.password` заданы — иначе гейт не стартует: без `/admin` базы негде завести.
+- 1С `base_url` каждой базы доступен из гейта; гейт-к-1С — всегда Basic auth.
+- Директория под `database.path` должна быть писмо-доступна процессу гейта; гейт создаст её сам.
+- Резервная копия файла БД обязательна: там и настройки баз 1С (включая пароли, они лежат в открытом виде), и зарегистрированные клиенты с активными токенами. Потеря токенов заставит пользователей пере-логиниться; потеря настроек баз — заводить их заново.
 
 ### Запуск
 
@@ -145,12 +182,13 @@ CONFIG_PATH=/etc/onec-mcp/config.yml onec-mcp
 ### Отзыв доступа
 
 - Снять флажок `Активен` или удалить запись.
-- Кэш гейта живёт 5 минут — после снятия флажка пользователь сможет ещё до 5 минут пользоваться текущим access token, плюс access token истечёт по TTL (1 час по умолчанию). Если нужно немедленно — перезапустить гейт.
-- Для гарантированного отзыва конкретного токена прямо сейчас можно очистить вручную:
+- Кэш гейта живёт 5 минут — после снятия флажка пользователь сможет ещё до 5 минут пользоваться текущим access token, плюс access token истечёт по TTL (1 час по умолчанию). Если нужно немедленно — снять и вернуть флажок «Включена» у базы в `/admin`: пересборка обвязки сбрасывает кэш верификации, перезапуск не нужен.
+- Чтобы отрезать сразу всех пользователей базы — выключить её в `/admin`: маршруты пропадают мгновенно.
+- Для гарантированного отзыва конкретного токена прямо сейчас можно очистить вручную (`<db>` — файл из `database.path`):
 
   ```bash
-  sqlite3 data/oauth.db "DELETE FROM access_tokens WHERE sub = '<UUID учётки>';"
-  sqlite3 data/oauth.db "UPDATE refresh_tokens SET revoked = 1 WHERE sub = '<UUID учётки>';"
+  sqlite3 <db> "DELETE FROM access_tokens WHERE sub = '<UUID учётки>';"
+  sqlite3 <db> "UPDATE refresh_tokens SET revoked = 1 WHERE sub = '<UUID учётки>';"
   ```
 
 ### Ротация ключа
@@ -164,15 +202,17 @@ CONFIG_PATH=/etc/onec-mcp/config.yml onec-mcp
 ### Claude (Pro / Max)
 
 1. Settings → Connectors → **Add custom connector**.
-2. **Remote MCP server URL**: `https://mcp.example.com/mcp` (точное значение даст администратор).
-3. Нажать `Add`. Откроется браузерное окно с формой гейта.
+2. **Remote MCP server URL**: `https://onec.nomadus.net/<slug>/mcp` — со слагом нужной базы (точное значение даст администратор).
+3. Нажать `Add`. Откроется браузерное окно с формой гейта — на ней будет указано имя базы, к которой идёт подключение.
 4. В поле «MCP access key» вставить полученный от админа ключ. Нажать `Authorize`.
 5. Connector активен — Claude автоматически зарегистрировался через DCR и получил токен.
+
+Для доступа к нескольким базам заводится **отдельный коннектор на каждую базу**, со своим URL и своим ключом.
 
 ### ChatGPT (Apps / Connectors)
 
 1. Settings → Apps & Connectors → **Add custom connector**.
-2. Указать URL гейта.
+2. Указать URL гейта со слагом базы: `https://onec.nomadus.net/<slug>/mcp`.
 3. ChatGPT проведёт DCR + PKCE flow.
 4. Откроется форма гейта — вставить ключ, авторизоваться.
 
@@ -188,7 +228,8 @@ CONFIG_PATH=/etc/onec-mcp/config.yml onec-mcp
 
 ### Audit-лог
 
-Все события audit пишутся в общий лог гейта со специальными msg-именами в slog-формате. Полная цепочка действий одного пользователя выбирается через:
+Все события audit пишутся в общий лог гейта со специальными msg-именами в slog-формате.
+Каждая запись несёт поле `tenant` — слаг базы. Полная цепочка действий одного пользователя выбирается через:
 
 ```bash
 grep -E 'msg=(oauth\.|mcp\.tool\.)' /var/log/onec-mcp.log | grep 'sub=<UUID учётки>'
@@ -196,22 +237,22 @@ grep -E 'msg=(oauth\.|mcp\.tool\.)' /var/log/onec-mcp.log | grep 'sub=<UUID уч
 
 | Событие | Когда пишется | Поля |
 |---|---|---|
-| `oauth.client.registered` | DCR от Claude/ChatGPT | `client_id`, `client_name` |
-| `oauth.login.failed` | Неверный ключ на форме | `remote`, `client_id` |
-| `oauth.code.issued` | Юзер ввёл правильный ключ | `client_id`, `sub`, `scope` |
-| `oauth.token.issued` | Выпуск access/refresh | `grant_type`, `sub`, `client_id`, `scope`, `resource` |
-| `oauth.token.refused` | 401 на /mcp | `reason` (`no_bearer`/`not_found`/`audience_mismatch`), `remote` |
-| `oauth.scope.denied` | Tool вне скоупа токена | `tool`, `required`, `sub`, `have` |
-| `mcp.tool.list` | Запрос списка инструментов | `sub`, `client_id`, `count` |
-| `mcp.tool.call` | Любой вызов tools/call | `sub`, `client_id`, `tool`, `ok`, `duration_ms`, `reason?` |
+| `oauth.client.registered` | DCR от Claude/ChatGPT | `tenant`, `client_id`, `client_name` |
+| `oauth.login.failed` | Неверный ключ на форме | `tenant`, `remote`, `client_id` |
+| `oauth.code.issued` | Юзер ввёл правильный ключ | `tenant`, `client_id`, `sub`, `scope` |
+| `oauth.token.issued` | Выпуск access/refresh | `tenant`, `grant_type`, `sub`, `client_id`, `scope`, `resource` |
+| `oauth.token.refused` | 401 на /{slug}/mcp | `tenant`, `reason` (`no_bearer`/`not_found`/`audience_mismatch`), `remote` |
+| `oauth.scope.denied` | Tool вне скоупа токена | `tenant`, `tool`, `required`, `sub`, `have` |
+| `mcp.tool.list` | Запрос списка инструментов | `tenant`, `sub`, `client_id`, `count` |
+| `mcp.tool.call` | Любой вызов tools/call | `tenant`, `sub`, `client_id`, `tool`, `ok`, `duration_ms`, `reason?` |
 
 ### Rate-limit
 
-По умолчанию пер-IP в окне 1 минута:
+По умолчанию пер-IP в окне 1 минута. Лимитеры **общие для всех баз** — считают по IP, а не по слагу:
 
-- `/oauth/authorize` POST — 10/мин (защищает от перебора ключей)
-- `/oauth/register` — 30/мин
-- `/oauth/token` — 120/мин
+- `/{slug}/oauth/authorize` GET и POST — 10/мин (POST защищает от перебора ключей; GET неаутентифицирован и ходит в общую SQLite, поэтому тоже лимитируется)
+- `/{slug}/oauth/register` — 30/мин
+- `/{slug}/oauth/token` — 120/мин
 
 При превышении — 429 + `Retry-After`. Настраивается через `oauth.rate_limit.*`. `0` отключает лимит.
 
@@ -225,13 +266,16 @@ grep -E 'msg=(oauth\.|mcp\.tool\.)' /var/log/onec-mcp.log | grep 'sub=<UUID уч
 
 ### Проверка живости
 
-- Гейт: `GET /health` → `{"status":"ok"}` (публичный).
-- 1С со стороны гейта: `GET /mcp/health` через тот же Basic — должен вернуть `status:"ok"` и время сервера.
+- Гейт: `GET /health` → `{"status":"ok"}` (публичный, один на все базы).
+- 1С со стороны гейта: `GET /mcp/health` через тот же Basic — должен вернуть `status:"ok"` и время сервера. Проверяется отдельно для каждой базы.
 
 ### Метаданные для отладки
 
-- `GET /.well-known/oauth-protected-resource` — что отдаёт RS.
-- `GET /.well-known/oauth-authorization-server` — endpoint'ы AS и поддерживаемые опции.
+- `GET /.well-known/oauth-protected-resource/<slug>/mcp` — что отдаёт RS этой базы.
+- `GET /.well-known/oauth-authorization-server/<slug>` — endpoint'ы AS этой базы и поддерживаемые опции.
+
+Те же метаданные дублируются под `/<slug>/.well-known/...` — для клиентов, которые ищут их
+по префиксу ресурса, а не по каноническому path-insertion из RFC 9728/8414.
 
 ---
 
@@ -242,27 +286,41 @@ grep -E 'msg=(oauth\.|mcp\.tool\.)' /var/log/onec-mcp.log | grep 'sub=<UUID уч
 | «Invalid access key» в форме | `Активен` в `MCP_Accounts`, точное совпадение ключа, не истёк ли `Account.DeletionMark` |
 | `tools/list` пустой | Скоупы у пользователя в табличной части. Без скоупов → LLM ничего не видит. |
 | `permission denied: tool X requires scope Y` | Добавить нужное значение в `Скоупы` и подождать TTL кэша (5 мин), либо перезапустить гейт |
-| 401 на /mcp с `reason=audience_mismatch` | Несовпадение `resource` в токене с `oauth.resource` в конфиге. Обычно проявляется при смене `public_url` — пере-логин решает. |
+| 401 на /{slug}/mcp с `reason=audience_mismatch` | Токен выпущен для другой базы (или ещё до перехода на мультибазовость). Проверить, что URL коннектора содержит нужный слаг; пере-логин решает. |
 | 401 с `reason=not_found` после паузы | Access token истёк. Клиент должен сам обновить — если не обновляет, проверить, что DCR прошёл и есть refresh token. |
+| `unknown client_id` на форме логина | Клиент зарегистрирован на другом слаге: DCR-регистрации не переиспользуются между базами. Пересоздать коннектор. |
+| 404 на /{slug}/mcp | Базы с таким слагом нет в `/admin`, она выключена, или опечатка в URL. Ещё вариант: OAuth выключен, а у базы пустой статический токен — тогда MCP-маршрут не публикуется вовсе (в логе старта будет `mcp endpoint not mounted`). |
 | 429 | Лимит превышен. Подождать минуту или поднять лимит в конфиге. |
-| 502 / `onec_error` | Проблема в 1С: проверить `GET /mcp/health` из гейта, доступность 1С, Basic-логин в `config.yml → onec.auth`. |
-| `oauth.token.refused reason=audience_mismatch` без вашей конфигурации | Кто-то пытается использовать чужой токен — повод заглянуть в лог. |
+| 502 / `onec_error` | Проблема в 1С: проверить `GET /mcp/health` из гейта, доступность 1С, адрес и Basic-логин базы в `/admin`. |
+| `oauth.token.refused reason=audience_mismatch` без вашей конфигурации | Кто-то пытается использовать токен другой базы — повод заглянуть в лог. |
+| 403 `cross-origin request rejected` в /admin | Форма отправлена не с того хоста, на котором открыт интерфейс. Так и задумано: это защита от CSRF. |
 
 ### Откатить всё и начать заново
 
 ```bash
-# Гейт: очистить хранилище OAuth (сбрасывает зарегистрированных клиентов и токены)
-rm data/oauth.db
+# Удалить файл БД (database.path): сбрасывает И настройки баз 1С, И клиентов с токенами
+rm /var/lib/onec-mcp/onec-mcp.db
 
 # 1С: удалить тестовые записи MCP_Accounts через интерфейс
 ```
 
-После этого все пользователи переподключают connector.
+После этого базы заводятся заново в `/admin`, а все пользователи переподключают connector.
 
 ---
 
 ## Совместимость
 
-- Если `oauth.enabled = false` — гейт работает по старой схеме: статический `mcp.bearer_token` на `/mcp`, никаких OAuth-endpoint-ов. Удобно для локальной разработки и для тестов через `curl`.
-- Когда `oauth.enabled = true`, статический Bearer на `/mcp` **отключается** автоматически — нельзя случайно оставить два пути аутентификации.
-- REST-эндпоинты (`/resolve/*`, `/reports/*`) защищены отдельным `api.bearer_token` и НЕ зависят от OAuth — их аудитория это серверная интеграция, а не LLM-клиенты.
+- Если `oauth.enabled = false` — гейт работает по статической схеме: статический токен базы (задаётся в `/admin`) на `/{slug}/mcp`, никаких OAuth-endpoint-ов. Удобно для локальной разработки и для тестов через `curl`.
+- Когда `oauth.enabled = true`, статический Bearer на `/{slug}/mcp` **отключается** автоматически — нельзя случайно оставить два пути аутентификации.
+- База без OAuth и без статического токена **не получает MCP-маршрута вовсе**: открытый `/mcp` хуже отсутствующего.
+- REST-эндпоинты (`/{slug}/resolve/*`, `/{slug}/reports/*`) защищены отдельным токеном API базы и НЕ зависят от OAuth — их аудитория это серверная интеграция, а не LLM-клиенты.
+
+### Переход с одиночной базы
+
+Переход **ломает существующие коннекторы**, и это осознанное решение:
+
+- URL сменился с `/mcp` на `/{slug}/mcp`, значит сменился и audience токенов.
+- Миграция дописывает в SQLite колонку `tenant`; строки, созданные до неё, получают пустой `tenant` и больше ни с чем не совпадают. Выпущенные ранее токены и DCR-регистрации становятся невалидными.
+- Настройки 1С переехали из YAML в БД: старый блок `onec:` в конфиге игнорируется, базу надо завести заново в `/admin`.
+
+Что делать: поднять новый конфиг, затем попросить пользователей удалить старый коннектор и добавить новый — с URL, содержащим слаг, и тем же ключом MCP. Ключи в 1С (`MCP_Accounts`) остаются валидными, их менять не нужно.

@@ -23,18 +23,22 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// OAuthLimiters — набор per-endpoint лимитеров для OAuth-маршрутов.
-// Хранится в main.go, чтобы там же можно было запускать Cleanup() в фоновом тикере.
+// OAuthLimiters — набор per-endpoint лимитеров для OAuth-маршрутов. Лимиты пер-IP и общие
+// для всех баз. Хранится в main.go, чтобы там же можно было запускать Cleanup() в фоновом тикере.
 type OAuthLimiters struct {
 	Authorize *oauth.FixedWindowLimiter
 	Register  *oauth.FixedWindowLimiter
 	Token     *oauth.FixedWindowLimiter
 }
 
-// NewRouter собирает chi-роутер. Если oauthServer != nil — публикуются метаданные/oauth-endpoint-ы
-// и /mcp защищается OAuth Bearer middleware; иначе работает легаси-схема (статический Bearer внутри mcp.Handler).
-// limiters может быть nil (тогда rate-limit не применяется), либо содержать настроенные лимитеры.
-func NewRouter(h *Handler, mcpHandler http.Handler, apiBearerToken string, oauthServer *oauth.Server, limiters *OAuthLimiters, logger *slog.Logger) *chi.Mux {
+// NewRouter собирает chi-роутер. Маршруты баз описаны шаблонами с {tenant} и резолвятся через
+// реестр на каждый запрос — базы правятся в /admin на живую, статически их развесить нельзя.
+//
+// В корне живут только /health, /admin/* и канонические well-known пути: RFC 9728/8414 требуют
+// вставлять path-компонент ресурса ПОСЛЕ well-known сегмента, а не перед ним.
+//
+// adminHandler может быть nil (admin выключен в конфиге).
+func NewRouter(reg *Registry, adminHandler http.Handler, limiters *OAuthLimiters, logger *slog.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -44,52 +48,98 @@ func NewRouter(h *Handler, mcpHandler http.Handler, apiBearerToken string, oauth
 
 	r.NotFound(notFoundHandler)
 
-	r.Get("/health", h.Health)
+	r.Get("/health", Health)
 
-	if apiBearerToken != "" {
-		r.Group(func(r chi.Router) {
-			r.Use(BearerAuth(apiBearerToken, logger))
-			r.Post("/resolve/customer", h.ResolveCustomer)
-			r.Post("/resolve/warehouse", h.ResolveWarehouse)
-			r.Post("/resolve/product", h.ResolveProduct)
-			r.Post("/resolve/sales_channel", h.ResolveSalesChannel)
-			r.Post("/reports/sales", h.SalesReport)
-			r.Post("/reports/stock", h.StockReport)
-		})
+	if adminHandler != nil {
+		r.Mount("/admin", adminHandler)
 	}
 
-	if oauthServer != nil {
-		// Discovery — публичные, без auth и без rate-limit (это просто статика метаданных)
-		r.Get("/.well-known/oauth-protected-resource", oauthServer.HandleProtectedResourceMetadata)
-		r.Get("/.well-known/oauth-authorization-server", oauthServer.HandleAuthorizationServerMetadata)
+	// Rate-limit. POST /oauth/authorize — это перебор ключей; GET — рендер формы, но он тоже
+	// неаутентифицирован и ходит в SQLite за клиентом, а соединение одно на весь гейт: без лимита
+	// шквал GET'ов на одну базу сериализуется с выпуском токенов и админкой всех остальных.
+	registerMW := chainMaybe(limiters != nil && limiters.Register != nil, func() func(http.Handler) http.Handler {
+		return limiters.Register.Middleware()
+	})
+	authorizeMW := chainMaybe(limiters != nil && limiters.Authorize != nil, func() func(http.Handler) http.Handler {
+		return limiters.Authorize.Middleware()
+	})
+	tokenMW := chainMaybe(limiters != nil && limiters.Token != nil, func() func(http.Handler) http.Handler {
+		return limiters.Token.Middleware()
+	})
 
-		// Rate-limit навешиваем только на чувствительные POST-операции.
-		// GET /oauth/authorize не лимитим — это просто рендер формы, реальная атака идёт через POST.
-		registerMW := chainMaybe(limiters != nil && limiters.Register != nil, func() func(http.Handler) http.Handler {
-			return limiters.Register.Middleware()
-		})
-		authorizeMW := chainMaybe(limiters != nil && limiters.Authorize != nil, func() func(http.Handler) http.Handler {
-			return limiters.Authorize.Middleware()
-		})
-		tokenMW := chainMaybe(limiters != nil && limiters.Token != nil, func() func(http.Handler) http.Handler {
-			return limiters.Token.Middleware()
-		})
+	// Канонические пути метаданных (RFC 9728 §3.1 / RFC 8414 §3.1). Именно их запрашивает
+	// MCP-клиент, получив resource_metadata в заголовке WWW-Authenticate.
+	r.Get("/.well-known/oauth-protected-resource/{tenant}/mcp",
+		reg.Handle(oauthEndpoint((*oauth.Server).HandleProtectedResourceMetadata)))
+	r.Get("/.well-known/oauth-authorization-server/{tenant}",
+		reg.Handle(oauthEndpoint((*oauth.Server).HandleAuthorizationServerMetadata)))
 
-		r.With(registerMW).Post("/oauth/register", oauthServer.HandleRegister)
-		r.Get("/oauth/authorize", oauthServer.HandleAuthorize)
-		r.With(authorizeMW).Post("/oauth/authorize", oauthServer.HandleAuthorize)
-		r.With(tokenMW).Post("/oauth/token", oauthServer.HandleToken)
-	}
+	r.Route("/{tenant}", func(r chi.Router) {
+		// Совместимая форма well-known: часть клиентов ищет метаданные по префиксу самого
+		// ресурса, а не по каноническому path-insertion. Дёшево отдать оба варианта.
+		r.Get("/.well-known/oauth-protected-resource",
+			reg.Handle(oauthEndpoint((*oauth.Server).HandleProtectedResourceMetadata)))
+		r.Get("/.well-known/oauth-authorization-server",
+			reg.Handle(oauthEndpoint((*oauth.Server).HandleAuthorizationServerMetadata)))
 
-	if mcpHandler != nil {
-		if oauthServer != nil {
-			r.With(oauthServer.Middleware).Post("/mcp", mcpHandler.ServeHTTP)
-		} else {
-			r.Post("/mcp", mcpHandler.ServeHTTP)
-		}
-	}
+		r.With(registerMW).Post("/oauth/register", reg.Handle(oauthEndpoint((*oauth.Server).HandleRegister)))
+		r.With(authorizeMW).Get("/oauth/authorize", reg.Handle(oauthEndpoint((*oauth.Server).HandleAuthorize)))
+		r.With(authorizeMW).Post("/oauth/authorize", reg.Handle(oauthEndpoint((*oauth.Server).HandleAuthorize)))
+		r.With(tokenMW).Post("/oauth/token", reg.Handle(oauthEndpoint((*oauth.Server).HandleToken)))
+
+		r.Post("/mcp", reg.Handle(serveMCP))
+
+		r.Post("/resolve/customer", reg.Handle(restEndpoint((*Handler).ResolveCustomer)))
+		r.Post("/resolve/warehouse", reg.Handle(restEndpoint((*Handler).ResolveWarehouse)))
+		r.Post("/resolve/product", reg.Handle(restEndpoint((*Handler).ResolveProduct)))
+		r.Post("/resolve/sales_channel", reg.Handle(restEndpoint((*Handler).ResolveSalesChannel)))
+		r.Post("/reports/sales", reg.Handle(restEndpoint((*Handler).SalesReport)))
+		r.Post("/reports/stock", reg.Handle(restEndpoint((*Handler).StockReport)))
+	})
 
 	return r
+}
+
+// oauthEndpoint адаптирует метод oauth.Server к маршруту базы. Если OAuth в гейте выключен —
+// у базы его нет, и endpoint просто не существует (404).
+func oauthEndpoint(method func(*oauth.Server, http.ResponseWriter, *http.Request)) func(*Tenant, http.ResponseWriter, *http.Request) {
+	return func(t *Tenant, w http.ResponseWriter, r *http.Request) {
+		if t.OAuth == nil {
+			notFoundHandler(w, r)
+			return
+		}
+		method(t.OAuth, w, r)
+	}
+}
+
+// serveMCP отдаёт JSON-RPC базы, предварительно навесив аутентификацию. При включённом OAuth
+// это middleware сервера этой базы (оно же проверяет audience токена); иначе — статический
+// Bearer, который mcp.Handler проверяет сам.
+func serveMCP(t *Tenant, w http.ResponseWriter, r *http.Request) {
+	if t.MCP == nil {
+		notFoundHandler(w, r)
+		return
+	}
+	if t.OAuth != nil {
+		t.OAuth.Middleware(t.MCP).ServeHTTP(w, r)
+		return
+	}
+	t.MCP.ServeHTTP(w, r)
+}
+
+// restEndpoint закрывает REST-обработчик базы её же Bearer-токеном. Токен не задан — маршрут
+// для этой базы не существует: REST это серверная интеграция, включать её «по умолчанию» нельзя.
+func restEndpoint(method func(*Handler, http.ResponseWriter, *http.Request)) func(*Tenant, http.ResponseWriter, *http.Request) {
+	return func(t *Tenant, w http.ResponseWriter, r *http.Request) {
+		if t.APIToken == "" {
+			notFoundHandler(w, r)
+			return
+		}
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			method(t.Handler, w, r)
+		})
+		BearerAuth(t.APIToken, t.Handler.logger)(h).ServeHTTP(w, r)
+	}
 }
 
 // chainMaybe — возвращает реальное middleware если условие выполнено, иначе passthrough.

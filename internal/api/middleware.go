@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -54,7 +55,7 @@ func BearerAuth(token string, logger *slog.Logger) func(http.Handler) http.Handl
 				return
 			}
 
-			if parts[1] != token {
+			if subtle.ConstantTimeCompare([]byte(parts[1]), []byte(token)) != 1 {
 				logger.Warn("unauthorized request", "reason", "invalid token", "path", r.URL.Path)
 				writeUnauthorized(w)
 				return

@@ -26,8 +26,8 @@ go build -o bin/server ./cmd/server
 # Test health endpoint
 curl http://localhost:8088/health
 
-# Test MCP endpoint
-curl -X POST http://localhost:8088/mcp \
+# Test MCP endpoint (tenant1 is a database slug from `tenants` in the config)
+curl -X POST http://localhost:8088/tenant1/mcp \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer your-secret-token' \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
@@ -38,13 +38,22 @@ curl -X POST http://localhost:8088/mcp \
 The service follows a layered architecture:
 
 ```
-cmd/server/main.go          Entry point, wires dependencies, handles graceful shutdown
+cmd/server/main.go          Entry point, wires dependencies, builds tenant runtimes
     ↓
 internal/api/               HTTP layer (chi router)
 ├── router.go               Route definitions, middleware chain
+├── registry.go             Slug → tenant runtime, rebuilt on every admin edit
 ├── handlers.go             REST endpoint handlers
 ├── middleware.go           Bearer auth middleware
 └── models.go               Request/response DTOs
+
+internal/admin/             /admin web UI for managing 1C databases
+├── admin.go                Basic auth, CSRF guard, CRUD handlers
+└── views.go                HTML templates
+
+internal/tenant/            1C database records
+├── tenant.go               Record type, defaults, validation
+└── store.go                SQLite CRUD
 
 internal/mcp/               MCP protocol layer
 ├── handler.go              JSON-RPC request router, tool dispatcher
@@ -56,14 +65,36 @@ internal/onec/              1C integration layer
 ├── client.go               HTTP client for 1C backend
 └── models.go               1C request/response types
 
+internal/store/             Shared SQLite handle (tenants + OAuth tables)
 internal/config/            Configuration (cleanenv + YAML)
 ```
 
+### Multi-database
+
+The gateway fronts several 1C databases at once. A database is a row in the `tenants` SQLite
+table, **not** a config entry — it is created and edited at `/admin` (Basic auth, credentials
+from the config). Its slug is the first path segment: `/{slug}/mcp`, `/{slug}/oauth/*`,
+`/{slug}/resolve/*`. Only `/health`, `/admin/*` and the canonical `.well-known/*` paths live at
+the root.
+
+Because databases change at runtime, routes cannot be registered per tenant at startup. The
+router holds `{tenant}` patterns and resolves each request through `api.Registry`, which
+`cmd/server/main.go` populates via a build function: one `onec.Client`, one
+`oauth.CachedVerifier`, one `oauth.Server`, one `mcp.Handler`, one `api.Handler` per database.
+Every admin mutation calls `Registry.Reload`, which rebuilds all runtimes and swaps the map.
+
+Nothing carrying database-specific state may be shared between tenants — in particular the
+key-verification cache, since a shared one would let a key from one 1C unlock another.
+
+Isolation rests on three independent mechanisms: a `tenant` column filtering every OAuth
+storage lookup, an audience check in `oauth.Server.Middleware` (a token minted for
+`<public_url>/<slug>/mcp` is rejected everywhere else), and per-database 1C credentials.
+
 ### Key Integration Points
 
-- **MCP Handler** (`internal/mcp/handler.go`): Routes `initialize`, `tools/list`, `tools/call` methods. Authentication via Bearer token configured in `mcp.bearer_token`.
-- **1C Client** (`internal/onec/client.go`): Calls 1C endpoints at `/mcp/resolve/customer`, `/mcp/resolve/warehouse`, `/mcp/reports/sales`. Supports basic and bearer auth.
-- **Dual Auth**: REST API uses `api.bearer_token`, MCP endpoint uses `mcp.bearer_token`. Both are optional.
+- **MCP Handler** (`internal/mcp/handler.go`): Routes `initialize`, `tools/list`, `tools/call` methods. Its static Bearer is the database's MCP token, and is blanked when OAuth is on. A blank token means *no authentication at all*, so a database with neither OAuth nor a static token gets no MCP route (see the `switch` in `buildTenants`).
+- **1C Client** (`internal/onec/client.go`): Calls 1C endpoints at `/mcp/resolve/customer`, `/mcp/resolve/warehouse`, `/mcp/reports/sales`. Basic auth only.
+- **Dual Auth**: REST API uses the database's API token, the MCP endpoint uses OAuth (or its static MCP token when `oauth.enabled = false`).
 
 ### MCP Tools
 
@@ -76,9 +107,13 @@ Three tools are exposed via `tools/list`:
 
 Config loaded from `configs/config.yml` (override with `CONFIG_PATH` env var). Create `configs/config.local.yml` for local development.
 
+The config holds only what is needed to boot and open `/admin`. Per-database settings (1C URL,
+Basic credentials, timeouts, tokens, scope overrides) are **not** here — they are rows in SQLite,
+edited through the admin UI.
+
 Key settings:
-- `onec.base_url` - 1C backend URL (required for actual data)
-- `onec.auth.type` - `basic` or `bearer`
-- `mcp.bearer_token` / `api.bearer_token` - Auth tokens (empty = disabled)
+- `database.path` - single SQLite file: tenants + OAuth clients/tokens
+- `admin.username` / `admin.password` - credentials for `/admin`; the gateway refuses to start without them when admin is enabled
+- `oauth.public_url` - external **root** URL of the gateway, without the slug
 - `limits.resolve_limit` - Max candidates returned (default: 10)
 - `limits.max_rows` - Max report rows (default: 5000)

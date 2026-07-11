@@ -107,8 +107,11 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Клиент принадлежит базе, на чей /oauth/register пришёл запрос: тот же client_id
+	// на другом слаге будет неизвестен, и flow там придётся начинать с новой DCR-регистрации.
 	client := &Client{
 		ClientID:                id,
+		Tenant:                  s.cfg.Tenant,
 		RedirectURIs:            req.RedirectURIs,
 		ClientName:              req.ClientName,
 		TokenEndpointAuthMethod: authMethod,

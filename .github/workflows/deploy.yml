@@ -27,23 +27,18 @@ jobs:
 
       - name: Generate config
         env:
-          ONEC_BASE_URL: ${{ secrets.ONEC_BASE_URL }}
-          ONEC_AUTH_TYPE: ${{ secrets.ONEC_AUTH_TYPE }}
-          ONEC_AUTH_USERNAME: ${{ secrets.ONEC_AUTH_USERNAME }}
-          ONEC_AUTH_PASSWORD: ${{ secrets.ONEC_AUTH_PASSWORD }}
-          ONEC_TENANT_HEADER: ${{ secrets.ONEC_TENANT_HEADER }}
-          ONEC_DEFAULT_TENANT: ${{ secrets.ONEC_DEFAULT_TENANT }}
-          MCP_BEARER_TOKEN: ${{ secrets.MCP_BEARER_TOKEN }}
-          API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
+          # Базы 1С в конфиге больше не описываются: они лежат в SQLite (database.path)
+          # и заводятся через /admin. Здесь — только то, что нужно, чтобы гейт поднялся.
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          DATABASE_PATH: ${{ secrets.DATABASE_PATH }}
           # OAuth — задайте OAUTH_PUBLIC_URL чтобы включить OAuth-режим (Custom Connector в Claude/ChatGPT).
+          # Это КОРНЕВОЙ URL гейта, без слага базы: слаг добавляется автоматически.
           # Остальные секреты опциональны: TTL/rate-limit имеют дефолты, переопределяются только при необходимости.
           OAUTH_PUBLIC_URL: ${{ secrets.OAUTH_PUBLIC_URL }}
-          OAUTH_RESOURCE: ${{ secrets.OAUTH_RESOURCE }}
-          OAUTH_DB_PATH: ${{ secrets.OAUTH_DB_PATH }}
           OAUTH_ACCESS_TOKEN_TTL: ${{ secrets.OAUTH_ACCESS_TOKEN_TTL }}
           OAUTH_REFRESH_TOKEN_TTL: ${{ secrets.OAUTH_REFRESH_TOKEN_TTL }}
           OAUTH_AUTH_CODE_TTL: ${{ secrets.OAUTH_AUTH_CODE_TTL }}
-          OAUTH_DEV_ACCESS_KEY: ${{ secrets.OAUTH_DEV_ACCESS_KEY }}
           OAUTH_RL_AUTHORIZE: ${{ secrets.OAUTH_RL_AUTHORIZE }}
           OAUTH_RL_REGISTER: ${{ secrets.OAUTH_RL_REGISTER }}
           OAUTH_RL_TOKEN: ${{ secrets.OAUTH_RL_TOKEN }}
@@ -57,15 +52,13 @@ jobs:
             host: 127.0.0.1
             port: 8088
 
-          onec:
-            base_url: ""
-            timeout_ms: 8000
-            auth:
-              type: ""
-              username: ""
-              password: ""
-            tenant_header: ""
-            default_tenant: ""
+          database:
+            path: "/var/lib/onec-mcp/onec-mcp.db"
+
+          admin:
+            enabled: true
+            username: ""
+            password: ""
 
           limits:
             resolve_limit: 10
@@ -73,16 +66,10 @@ jobs:
 
           mcp:
             enabled: true
-            bearer_token: ""
-
-          api:
-            bearer_token: ""
 
           oauth:
             enabled: false
             public_url: ""
-            resource: ""
-            db_path: "/var/lib/onec-mcp/oauth.db"
             access_token_ttl: "1h"
             refresh_token_ttl: "720h"
             auth_code_ttl: "10m"
@@ -97,34 +84,30 @@ jobs:
               - "mcp:report:money"
               - "mcp:report:cost"
               - "mcp:admin:eventlog"
-            dev_access_key: ""
             rate_limit:
               authorize_per_minute: 10
               register_per_minute: 30
               token_per_minute: 120
           EOF
 
-          yq -i ".onec.base_url = strenv(ONEC_BASE_URL)" onec-mcp.yml
-          yq -i ".onec.auth.type = strenv(ONEC_AUTH_TYPE)" onec-mcp.yml
-          yq -i ".onec.auth.username = strenv(ONEC_AUTH_USERNAME)" onec-mcp.yml
-          yq -i ".onec.auth.password = strenv(ONEC_AUTH_PASSWORD)" onec-mcp.yml
-          yq -i ".onec.tenant_header = strenv(ONEC_TENANT_HEADER)" onec-mcp.yml
-          yq -i ".onec.default_tenant = strenv(ONEC_DEFAULT_TENANT)" onec-mcp.yml
-          yq -i ".mcp.bearer_token = strenv(MCP_BEARER_TOKEN)" onec-mcp.yml
-          yq -i ".api.bearer_token = strenv(API_BEARER_TOKEN)" onec-mcp.yml
+          # Без учётки /admin недостижим, а базы заводятся только там — гейт просто не стартует.
+          if [ -z "${ADMIN_USERNAME:-}" ] || [ -z "${ADMIN_PASSWORD:-}" ]; then
+            echo "ADMIN_USERNAME / ADMIN_PASSWORD secrets are required" >&2
+            exit 1
+          fi
+          yq -i ".admin.username = strenv(ADMIN_USERNAME)" onec-mcp.yml
+          yq -i ".admin.password = strenv(ADMIN_PASSWORD)" onec-mcp.yml
+
+          if [ -n "${DATABASE_PATH:-}" ]; then
+            yq -i ".database.path = strenv(DATABASE_PATH)" onec-mcp.yml
+          fi
 
           # OAuth включается автоматически при заданном OAUTH_PUBLIC_URL.
-          # Без него гейт остаётся в легаси-режиме со статическим MCP_BEARER_TOKEN.
+          # Без него гейт остаётся в статическом режиме с mcp_token, заданным у базы в /admin.
           # Все блоки — явные if/then/fi, чтобы set -e не споткнулся о пустые && chains.
           if [ -n "${OAUTH_PUBLIC_URL:-}" ]; then
             yq -i ".oauth.enabled = true" onec-mcp.yml
             yq -i ".oauth.public_url = strenv(OAUTH_PUBLIC_URL)" onec-mcp.yml
-          fi
-          if [ -n "${OAUTH_RESOURCE:-}" ]; then
-            yq -i ".oauth.resource = strenv(OAUTH_RESOURCE)" onec-mcp.yml
-          fi
-          if [ -n "${OAUTH_DB_PATH:-}" ]; then
-            yq -i ".oauth.db_path = strenv(OAUTH_DB_PATH)" onec-mcp.yml
           fi
           if [ -n "${OAUTH_ACCESS_TOKEN_TTL:-}" ]; then
             yq -i ".oauth.access_token_ttl = strenv(OAUTH_ACCESS_TOKEN_TTL)" onec-mcp.yml
@@ -134,9 +117,6 @@ jobs:
           fi
           if [ -n "${OAUTH_AUTH_CODE_TTL:-}" ]; then
             yq -i ".oauth.auth_code_ttl = strenv(OAUTH_AUTH_CODE_TTL)" onec-mcp.yml
-          fi
-          if [ -n "${OAUTH_DEV_ACCESS_KEY:-}" ]; then
-            yq -i ".oauth.dev_access_key = strenv(OAUTH_DEV_ACCESS_KEY)" onec-mcp.yml
           fi
           # rate-limit — числа, env() в yq парсит значение в int
           if [ -n "${OAUTH_RL_AUTHORIZE:-}" ]; then

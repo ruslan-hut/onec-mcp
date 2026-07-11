@@ -1,8 +1,18 @@
 # API Reference
 
+## Paths
+
+Every endpoint below except `/health` and `/admin/*` is scoped to a 1C database
+and lives under that database's slug — `/{slug}/resolve/customer`,
+`/{slug}/reports/sales`, `/{slug}/mcp`. Databases are created in the admin UI
+(see [OAuth Setup & Admin Guide](oauth-setup.md)); an unknown, disabled, or
+misspelled slug returns 404.
+
+For brevity the sections below write the paths without the `/{slug}` prefix.
+
 ## Authentication
 
-### REST API (`/resolve/*`, `/reports/*`)
+### REST API (`/{slug}/resolve/*`, `/{slug}/reports/*`)
 
 Protected endpoints require Bearer token authentication:
 
@@ -10,25 +20,31 @@ Protected endpoints require Bearer token authentication:
 Authorization: Bearer <api-token>
 ```
 
-Token is configured via `api.bearer_token` in config. If token is not configured, authentication is disabled.
+The token is the database's own API token, set in `/admin`. A database without
+one does not expose REST endpoints at all.
 
-### MCP Endpoint (`/mcp`)
+### MCP Endpoint (`/{slug}/mcp`)
 
-OAuth 2.0 is the primary authentication for `/mcp`. LLM clients register
-dynamically, obtain a per-user access token, and the token's granted scopes
-drive tool access (see [OAuth Setup & Admin Guide](oauth-setup.md)):
+OAuth 2.0 is the primary authentication. LLM clients register dynamically,
+obtain a per-user access token, and the token's granted scopes drive tool access:
 
 ```
 Authorization: Bearer <oauth-access-token>
 ```
 
-When `oauth.enabled = false`, `/mcp` falls back to a static Bearer token
-configured via `mcp.bearer_token` — intended only for local development and
-`curl` tests:
+Each database runs its own authorization server, and tokens are bound to that
+database's audience — a token issued for one slug is rejected on another.
+
+When `oauth.enabled = false`, the endpoint falls back to the database's static
+MCP token, set in `/admin` — intended only for local development and `curl`
+tests:
 
 ```
 Authorization: Bearer <mcp-token>
 ```
+
+A database with neither OAuth nor a static token gets no MCP route, rather than
+an unauthenticated one.
 
 ---
 

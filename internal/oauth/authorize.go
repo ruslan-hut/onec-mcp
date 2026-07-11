@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html/template"
@@ -59,9 +60,8 @@ func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, err.Error())
 		return
 	}
-	_ = client
 
-	s.renderLogin(w, req, "")
+	s.renderLogin(w, req, client, "")
 }
 
 func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +79,7 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 
 	accessKey := strings.TrimSpace(r.PostForm.Get("access_key"))
 	if accessKey == "" {
-		s.renderLogin(w, req, "Access key is required")
+		s.renderLogin(w, req, client, "Access key is required")
 		return
 	}
 
@@ -87,7 +87,7 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Сообщение специально расплывчатое — не подсказывать атакующему, что не так
 		s.logger.Warn("oauth.login.failed", "remote", r.RemoteAddr, "client_id", req.ClientID)
-		s.renderLogin(w, req, "Invalid access key")
+		s.renderLogin(w, req, client, "Invalid access key")
 		return
 	}
 
@@ -104,16 +104,19 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resource фиксируем своим — AS обслуживает ровно одну базу, а совпадение с req.Resource
+	// (если клиент его прислал) уже проверено в validateAuthorizeParams.
 	now := time.Now()
 	authCode := &AuthCode{
 		Code:                code,
+		Tenant:              s.cfg.Tenant,
 		ClientID:            req.ClientID,
 		RedirectURI:         req.RedirectURI,
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Sub:                 user.Sub,
 		Scope:               allowedScope,
-		Resource:            req.Resource,
+		Resource:            s.resource(),
 		ExpiresAt:           now.Add(s.cfg.AuthCodeTTL),
 	}
 	if err := s.storage.CreateAuthCode(r.Context(), authCode); err != nil {
@@ -160,8 +163,14 @@ func (s *Server) validateAuthorizeParams(r *http.Request, req authorizeRequest) 
 	if req.CodeChallengeMethod != "S256" {
 		return nil, fmt.Errorf("unsupported code_challenge_method, only S256")
 	}
+	// RFC 8707: клиент вправе не прислать resource, но если прислал — он должен указывать
+	// на эту базу. Иначе — попытка получить токен с чужим audience.
+	if err := s.checkResource(req.Resource); err != nil {
+		return nil, err
+	}
 
-	client, err := s.storage.GetClient(r.Context(), req.ClientID)
+	// Клиент ищется в пределах базы: client_id, зарегистрированный на другом слаге, здесь неизвестен.
+	client, err := s.storage.GetClient(r.Context(), s.cfg.Tenant, req.ClientID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("unknown client_id")
@@ -185,18 +194,24 @@ func (s *Server) validateAuthorizeParams(r *http.Request, req authorizeRequest) 
 	return client, nil
 }
 
-// verifyAccessKey выбирает стратегию: cfg.VerifyKey (прод, через 1С с кэшем)
-// либо cfg.DevAccessKey (dev fallback). Если ни одна не настроена — всегда отказ.
+// verifyAccessKey проверяет введённый на форме ключ. Сначала dev-ключ базы, если он задан:
+// это осознанный обход 1С, чтобы можно было поднять базу до того, как настроен /mcp/auth/verify.
+// Проверять его вторым бессмысленно — VerifyKey задан всегда, и до fallback дело бы не дошло.
+// В проде dev-ключ должен быть пустым (см. подсказку в /admin).
+//
+// Сравнение constant-time: ключ — секрет, и по времени ответа его не должно быть видно.
 func (s *Server) verifyAccessKey(ctx context.Context, key string) (*UserInfo, error) {
-	if s.cfg.VerifyKey != nil {
-		return s.cfg.VerifyKey(ctx, key)
-	}
-	if s.cfg.DevAccessKey != "" && key == s.cfg.DevAccessKey {
+	if s.cfg.DevAccessKey != "" &&
+		subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.DevAccessKey)) == 1 {
+		s.logger.Warn("oauth.login.dev_key_used", "tenant", s.cfg.Tenant)
 		return &UserInfo{
 			Sub:    "dev-user",
 			Name:   "Dev User",
 			Scopes: s.cfg.SupportedScopes,
 		}, nil
+	}
+	if s.cfg.VerifyKey != nil {
+		return s.cfg.VerifyKey(ctx, key)
 	}
 	return nil, errors.New("invalid access key")
 }
@@ -221,9 +236,9 @@ button:hover { background: #333; }
 </head>
 <body>
 <h1>Authorize MCP access</h1>
-<p class="sub">Application <span class="client">{{.ClientName}}</span> wants to access your data via MCP.</p>
+<p class="sub">Application <span class="client">{{.ClientName}}</span> wants to access database <span class="client">{{.TenantName}}</span> via MCP.</p>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="POST" action="/oauth/authorize">
+<form method="POST" action="{{.ActionURL}}">
   <label for="access_key">MCP access key</label>
   <input id="access_key" name="access_key" type="password" autocomplete="off" autofocus required>
   <input type="hidden" name="response_type" value="{{.Req.ResponseType}}">
@@ -246,11 +261,15 @@ var errorTemplate = template.Must(template.New("err").Parse(`<!doctype html>
 </head>
 <body><h1>Authorization error</h1><p>{{.}}</p></body></html>`))
 
-func (s *Server) renderLogin(w http.ResponseWriter, req authorizeRequest, errMsg string) {
+// renderLogin получает клиента параметром, а не читает его из БД сам: вызывающий только что
+// достал его в validateAuthorizeParams. Второй запрос был бы лишним походом в SQLite на КАЖДЫЙ
+// неаутентифицированный GET /oauth/authorize — а соединение одно на весь гейт, и такой трафик
+// сериализуется с админкой и выпуском токенов всех остальных баз.
+func (s *Server) renderLogin(w http.ResponseWriter, req authorizeRequest, client *Client, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	clientName := ""
-	if client, err := s.storage.GetClient(context.Background(), req.ClientID); err == nil {
+	if client != nil {
 		clientName = client.ClientName
 		if clientName == "" {
 			clientName = client.ClientID
@@ -261,10 +280,14 @@ func (s *Server) renderLogin(w http.ResponseWriter, req authorizeRequest, errMsg
 		Req        authorizeRequest
 		Error      string
 		ClientName string
+		TenantName string
+		ActionURL  string
 	}{
 		Req:        req,
 		Error:      errMsg,
 		ClientName: clientName,
+		TenantName: s.cfg.TenantName,
+		ActionURL:  s.authorizeEndpoint(),
 	}
 	_ = loginTemplate.Execute(w, data)
 }

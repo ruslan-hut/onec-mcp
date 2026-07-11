@@ -72,8 +72,11 @@ func (h *Handler) writeOneCError(w http.ResponseWriter, err error, fallbackMessa
 	h.writeError(w, http.StatusBadGateway, "onec_error", fallbackMessage)
 }
 
-func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	h.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// Health — корневой /health, общий для всех баз: живость самого гейта, а не 1С.
+func Health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (h *Handler) ResolveCustomer(w http.ResponseWriter, r *http.Request) {

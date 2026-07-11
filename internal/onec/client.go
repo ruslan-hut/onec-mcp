@@ -11,15 +11,32 @@ import (
 	"strings"
 	"time"
 
-	"example.com/mcp-sales-mvp/internal/config"
 	"example.com/mcp-sales-mvp/internal/oauth"
 )
 
+// Settings — параметры подключения к одной базе 1С. Приходят из записи тенанта в БД.
+// Авторизация всегда basic.
+type Settings struct {
+	BaseURL  string
+	Username string
+	Password string
+	// Timeout — для быстрых вызовов (resolve_*, auth/verify).
+	Timeout time.Duration
+	// ReportTimeout — для отчётных эндпойнтов (/mcp/reports/*): они сканируют регистры
+	// и легально дольше резолвов (ТЗ availability_report допускает до 30 с).
+	ReportTimeout time.Duration
+	TenantHeader  string
+	DefaultTenant string
+	// ResolveCacheTTL — TTL кэша resolve_*. <= 0 отключает кэш.
+	ResolveCacheTTL time.Duration
+}
+
+// Client — HTTP-клиент одной базы 1С. Экземпляр создаётся на каждый тенант:
+// baseURL, учётка и resolveCache внутри — значит кэш резолвов изолирован по базам сам собой.
 type Client struct {
 	httpClient       *http.Client
 	httpReportClient *http.Client
 	baseURL          string
-	authType         string
 	username         string
 	password         string
 	tenantHeader     string
@@ -28,23 +45,22 @@ type Client struct {
 	resolveCache     *resolveCache
 }
 
-func NewClient(cfg *config.OneCConfig, logger *slog.Logger) *Client {
+func NewClient(s Settings, logger *slog.Logger) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: cfg.Timeout(),
+			Timeout: s.Timeout,
 		},
 		// отдельный клиент для /mcp/reports/* — отчёты сканируют регистры и легально дольше резолвов
 		httpReportClient: &http.Client{
-			Timeout: cfg.ReportTimeout(),
+			Timeout: s.ReportTimeout,
 		},
-		baseURL:       cfg.BaseURL,
-		authType:      cfg.Auth.Type,
-		username:      cfg.Auth.Username,
-		password:      cfg.Auth.Password,
-		tenantHeader:  cfg.TenantHeader,
-		defaultTenant: cfg.DefaultTenant,
+		baseURL:       s.BaseURL,
+		username:      s.Username,
+		password:      s.Password,
+		tenantHeader:  s.TenantHeader,
+		defaultTenant: s.DefaultTenant,
 		logger:        logger,
-		resolveCache:  newResolveCache(cfg.ResolveCacheTTL()),
+		resolveCache:  newResolveCache(s.ResolveCacheTTL),
 	}
 }
 
@@ -71,12 +87,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.Header.Set(c.tenantHeader, c.defaultTenant)
 	}
 
-	switch c.authType {
-	case "basic":
-		req.SetBasicAuth(c.username, c.password)
-	case "bearer":
-		req.Header.Set("Authorization", "Bearer "+c.password)
-	}
+	req.SetBasicAuth(c.username, c.password)
 
 	// Прокидываем sub/scopes резолвнутого пользователя в 1С (defense in depth).
 	// 1С использует X-MCP-Scopes для per-endpoint ACL — даже при компрометации гейта

@@ -2,15 +2,13 @@ server:
   host: 127.0.0.1
   port: 8088
 
-onec:
-  base_url: "${ONEC_BASE_URL}"
-  timeout_ms: 8000
-  auth:
-    type: "${ONEC_AUTH_TYPE}"
-    username: "${ONEC_AUTH_USERNAME}"
-    password: "${ONEC_AUTH_PASSWORD}"
-  tenant_header: "${ONEC_TENANT_HEADER}"
-  default_tenant: "${ONEC_DEFAULT_TENANT}"
+database:
+  path: "/var/lib/onec-mcp/onec-mcp.db"
+
+admin:
+  enabled: true
+  username: "${ADMIN_USERNAME}"
+  password: "${ADMIN_PASSWORD}"
 
 limits:
   resolve_limit: 10
@@ -18,7 +16,27 @@ limits:
 
 mcp:
   enabled: true
-  bearer_token: "${MCP_BEARER_TOKEN}"
 
-api:
-  bearer_token: "${API_BEARER_TOKEN}"
+oauth:
+  enabled: true
+  public_url: "${OAUTH_PUBLIC_URL}"
+  access_token_ttl: "1h"
+  refresh_token_ttl: "720h"
+  auth_code_ttl: "10m"
+  default_scopes:
+    - "mcp:resolve"
+    - "mcp:report:sales"
+    - "mcp:report:stock"
+  supported_scopes:
+    - "mcp:resolve"
+    - "mcp:report:sales"
+    - "mcp:report:stock"
+    - "mcp:report:money"
+    - "mcp:report:cost"
+    - "mcp:admin:eventlog"
+  rate_limit:
+    authorize_per_minute: 10
+    register_per_minute: 30
+    token_per_minute: 120
+
+# Базы 1С здесь не описываются — они в SQLite по database.path, заводятся через /admin.

@@ -17,6 +17,8 @@ A Go service that acts as a gateway between an LLM/MCP client and 1C ERP via HTT
 - **Settlements & purchases** - receivables/payables balances (ДЗ/КЗ, expanded by sign) and goods-purchase turnover; together with stock they cover the full Cash Conversion Cycle (DIO/DSO/DPO)
 - **MCP protocol support** - JSON-RPC 2.0 endpoint for LLM integration
 - **OAuth 2.0** - per-user keys, scope-based tool access, and audit logging
+- **Multi-database** - several 1C databases behind one gateway, each under its own path slug and its own OAuth authorization server
+- **Admin UI** - databases are stored in SQLite and managed at `/admin`, no restart and no config edit required
 
 ## Requirements
 
@@ -32,12 +34,16 @@ go run ./cmd/server
 # Test health endpoint
 curl http://localhost:8088/health
 
-# Test MCP endpoint (OAuth token, or the static fallback when oauth.enabled = false)
-curl -X POST http://localhost:8088/mcp \
+# Add a 1C database at http://localhost:8088/admin, then use its slug:
+curl -X POST http://localhost:8088/tenant1/mcp \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <oauth-access-token>' \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
+
+A fresh database has no tenants, so the gateway starts serving nothing but
+`/health` and `/admin`. That is expected — add the first 1C database in the
+admin UI.
 
 ## Configuration
 
@@ -47,26 +53,48 @@ Copy and edit the config file:
 cp configs/config.yml configs/config.local.yml
 ```
 
+The config holds only what the gateway needs in order to boot and open `/admin`.
+**1C databases are not in the config** — they live in SQLite and are managed
+through the admin UI.
+
 | Option | Description | Default |
 |--------|-------------|---------|
 | `server.host` | Server bind address | `0.0.0.0` |
 | `server.port` | Server port | `8088` |
-| `onec.base_url` | 1C API base URL | - |
-| `onec.timeout_ms` | Request timeout in ms | `8000` |
-| `onec.auth.type` | Auth type (`basic` / `bearer`) | - |
+| `database.path` | SQLite file: tenants + OAuth clients/tokens | `data/onec-mcp.db` |
+| `admin.enabled` | Serve the admin UI at `/admin` | `true` |
+| `admin.username` / `admin.password` | Admin credentials (Basic auth) | - |
 | `limits.resolve_limit` | Max resolve results | `10` |
 | `limits.max_rows` | Max report rows | `5000` |
-| `mcp.enabled` | Enable MCP endpoint | `true` |
-| `oauth.enabled` | Enable OAuth 2.0 (primary auth for `/mcp`) | `true` |
-| `mcp.bearer_token` | Static fallback token for `/mcp` (used only when `oauth.enabled = false`) | - |
-| `api.bearer_token` | Bearer token for REST API auth | - |
+| `mcp.enabled` | Enable MCP endpoints | `true` |
+| `oauth.enabled` | Enable OAuth 2.0 (primary auth for `/{slug}/mcp`) | `false` |
+| `oauth.public_url` | External **root** URL of the gateway, no slug | - |
 
-**Authentication.** OAuth 2.0 is the primary auth for the `/mcp` endpoint: LLM
-clients register dynamically, obtain a per-user token, and the token's granted
-scopes drive tool access. The static `mcp.bearer_token` is only a fallback for
-local development and `curl` tests when `oauth.enabled = false`. REST endpoints
-(`/resolve/*`, `/reports/*`) are a separate server-side integration surface
-guarded by `api.bearer_token`, independent of OAuth. See the
+## Managing databases
+
+Everything about a 1C database — its slug, 1C address and Basic credentials,
+timeouts, tokens, scope overrides — is edited at `/admin`, behind Basic auth with
+the credentials from the config. Changes take effect immediately: the router
+resolves slugs through a registry that is rebuilt on every save, so no restart is
+needed.
+
+Each database gets a slug, and the slug is the first path segment: `/tenant1/mcp`,
+`/tenant1/oauth/*`, `/tenant1/resolve/*`. Slugs must match `[a-z0-9-]` and cannot
+be `health`, `admin`, `mcp`, `oauth`, or `.well-known`. A slug cannot be renamed
+after creation — it is baked into connector URLs, the OAuth issuer, and the
+audience of every token already issued.
+
+**Authentication.** OAuth 2.0 is the primary auth for the `/{slug}/mcp`
+endpoint: LLM clients register dynamically, obtain a per-user token, and the
+token's granted scopes drive tool access. Every database runs its own
+authorization server — issuer is `<public_url>/<slug>` and the token audience is
+`<public_url>/<slug>/mcp` — so a token minted for one database is rejected on
+every other. A database's static MCP token is only a fallback for local
+development and `curl` tests when `oauth.enabled = false`; a database with
+neither OAuth nor a static token gets no MCP route at all, rather than an
+unauthenticated one. REST endpoints (`/{slug}/resolve/*`, `/{slug}/reports/*`)
+are a separate server-side integration surface guarded by the database's own API
+token, independent of OAuth. See the
 [OAuth Setup & Admin Guide](docs/oauth-setup.md).
 
 ## Documentation
@@ -85,40 +113,52 @@ guarded by `api.bearer_token`, independent of OAuth. See the
 ├── configs/             # Configuration files
 ├── docs/                # Documentation
 ├── internal/
-│   ├── api/             # HTTP handlers and router
+│   ├── admin/           # /admin web UI for managing 1C databases
+│   ├── api/             # HTTP handlers, router, tenant registry
 │   ├── config/          # Configuration loader
 │   ├── mcp/             # MCP JSON-RPC handler
 │   ├── oauth/           # OAuth 2.0 server, scopes, audit
-│   └── onec/            # 1C HTTP client
+│   ├── onec/            # 1C HTTP client
+│   ├── store/           # Shared SQLite handle
+│   └── tenant/          # 1C database records and their storage
 ├── go.mod
 └── go.sum
 ```
 
 ## Endpoints
 
+`{slug}` is the slug of a database created in the admin UI. Only `/health`,
+`/admin/*` and the canonical `.well-known/*` paths live at the root.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/resolve/customer` | POST | Search customers |
-| `/resolve/warehouse` | POST | Search warehouses |
-| `/resolve/product` | POST | Search products |
-| `/resolve/sales_channel` | POST | Search sales channels |
-| `/reports/sales` | POST | Sales report |
-| `/reports/stock` | POST | Stock balance report |
-| `/reports/cash_balance` | POST | Cash-on-hand balance |
-| `/reports/cash_flow` | POST | Cash flow turnovers |
-| `/reports/receivables` | POST | Customer receivables balance (ДЗ + advances) |
-| `/reports/payables` | POST | Supplier payables balance (КЗ + advances) |
-| `/reports/purchases` | POST | Goods-purchase turnover |
-| `/mcp` | POST | MCP JSON-RPC 2.0 |
-| `/.well-known/oauth-protected-resource` | GET | OAuth resource metadata |
-| `/.well-known/oauth-authorization-server` | GET | OAuth server metadata |
-| `/oauth/register` | POST | Dynamic client registration |
-| `/oauth/authorize` | GET/POST | Authorization endpoint |
-| `/oauth/token` | POST | Token endpoint |
+| `/admin/*` | GET/POST | Admin UI: manage 1C databases (Basic auth) |
+| `/{slug}/resolve/customer` | POST | Search customers |
+| `/{slug}/resolve/warehouse` | POST | Search warehouses |
+| `/{slug}/resolve/product` | POST | Search products |
+| `/{slug}/resolve/sales_channel` | POST | Search sales channels |
+| `/{slug}/reports/sales` | POST | Sales report |
+| `/{slug}/reports/stock` | POST | Stock balance report |
+| `/{slug}/reports/cash_balance` | POST | Cash-on-hand balance |
+| `/{slug}/reports/cash_flow` | POST | Cash flow turnovers |
+| `/{slug}/reports/receivables` | POST | Customer receivables balance (ДЗ + advances) |
+| `/{slug}/reports/payables` | POST | Supplier payables balance (КЗ + advances) |
+| `/{slug}/reports/purchases` | POST | Goods-purchase turnover |
+| `/{slug}/mcp` | POST | MCP JSON-RPC 2.0 |
+| `/.well-known/oauth-protected-resource/{slug}/mcp` | GET | OAuth resource metadata (RFC 9728) |
+| `/.well-known/oauth-authorization-server/{slug}` | GET | OAuth server metadata (RFC 8414) |
+| `/{slug}/oauth/register` | POST | Dynamic client registration |
+| `/{slug}/oauth/authorize` | GET/POST | Authorization endpoint |
+| `/{slug}/oauth/token` | POST | Token endpoint |
 
-REST endpoints are mounted only when `api.bearer_token` is set; the OAuth and
-discovery endpoints only when an OAuth server is configured.
+Discovery metadata is also served under `/{slug}/.well-known/...` for clients
+that look for it beneath the resource prefix instead of the canonical
+path-insertion form.
+
+REST endpoints are mounted only for databases that set an API token; the OAuth
+and discovery endpoints only when `oauth.enabled` is true. A disabled database
+serves no routes at all.
 
 ## MCP Tools
 

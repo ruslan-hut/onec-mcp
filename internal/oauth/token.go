@@ -55,8 +55,15 @@ func (s *Server) tokenAuthorizationCode(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Consume — атомарно достаём и удаляем код, чтобы исключить повторное использование
-	authCode, err := s.storage.ConsumeAuthCode(r.Context(), code)
+	// Resource (RFC 8707): если клиент его прислал — он обязан указывать на эту базу
+	if err := s.checkResource(resource); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_target", err.Error())
+		return
+	}
+
+	// Consume — атомарно достаём и удаляем код, чтобы исключить повторное использование.
+	// Поиск ограничен своей базой: код, выданный на другом слаге, не найдётся.
+	authCode, err := s.storage.ConsumeAuthCode(r.Context(), s.cfg.Tenant, code)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "code is invalid or expired")
 		return
@@ -74,18 +81,9 @@ func (s *Server) tokenAuthorizationCode(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Resource (RFC 8707): если был указан при /authorize — должен совпасть на /token
-	if authCode.Resource != "" && resource != "" && authCode.Resource != resource {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_target", "resource mismatch")
-		return
-	}
-	effectiveResource := authCode.Resource
-	if effectiveResource == "" {
-		effectiveResource = resource
-	}
-	if effectiveResource == "" {
-		effectiveResource = s.cfg.Resource
-	}
+	// Audience всегда наш: AS обслуживает ровно один ресурс, а присланный клиентом resource
+	// уже проверен на совпадение выше.
+	effectiveResource := s.resource()
 
 	access, refresh, err := s.issueTokens(r.Context(), clientID, authCode.Sub, authCode.Scope, effectiveResource, "")
 	if err != nil {
@@ -123,9 +121,15 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Без этой проверки клиент мог бы на refresh подменить audience на чужую базу
+	if err := s.checkResource(resource); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_target", err.Error())
+		return
+	}
+
 	// Consume — атомарно помечает revoked и возвращает данные.
 	// Повторный вызов с тем же токеном получит ErrNotFound — это защита от replay.
-	oldRefresh, err := s.storage.ConsumeRefreshToken(r.Context(), refreshTokenStr)
+	oldRefresh, err := s.storage.ConsumeRefreshToken(r.Context(), s.cfg.Tenant, refreshTokenStr)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "refresh_token is invalid or revoked")
 		return
@@ -146,12 +150,7 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	effectiveResource := oldRefresh.Resource
-	if resource != "" {
-		effectiveResource = resource
-	}
-
-	access, refresh, err := s.issueTokens(r.Context(), clientID, oldRefresh.Sub, newScope, effectiveResource, oldRefresh.Token)
+	access, refresh, err := s.issueTokens(r.Context(), clientID, oldRefresh.Sub, newScope, s.resource(), oldRefresh.Token)
 	if err != nil {
 		s.logger.Error("oauth.token.issue_failed", "grant_type", "refresh_token", "error", err)
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to issue tokens")
@@ -163,7 +162,7 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 		"sub", oldRefresh.Sub,
 		"client_id", clientID,
 		"scope", newScope,
-		"resource", effectiveResource,
+		"resource", s.resource(),
 	)
 
 	writeJSON(w, http.StatusOK, TokenResponse{
@@ -190,6 +189,7 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 	now := time.Now()
 	access := &AccessToken{
 		Token:     accessStr,
+		Tenant:    s.cfg.Tenant,
 		ClientID:  clientID,
 		Sub:       sub,
 		Scope:     scope,
@@ -203,6 +203,7 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 
 	refresh := &RefreshToken{
 		Token:       refreshStr,
+		Tenant:      s.cfg.Tenant,
 		ClientID:    clientID,
 		Sub:         sub,
 		Scope:       scope,
@@ -218,4 +219,3 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 
 	return access, refresh, nil
 }
-

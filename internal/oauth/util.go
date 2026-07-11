@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"os"
 )
 
 // randomToken — криптостойкий 32-байтный токен в base64url без padding.
@@ -27,8 +26,4 @@ func verifyPKCE(verifier, challenge, method string) bool {
 	sum := sha256.Sum256([]byte(verifier))
 	calc := base64.RawURLEncoding.EncodeToString(sum[:])
 	return subtle.ConstantTimeCompare([]byte(calc), []byte(challenge)) == 1
-}
-
-func ensureDir(path string) error {
-	return os.MkdirAll(path, 0o750)
 }

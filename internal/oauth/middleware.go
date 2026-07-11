@@ -17,6 +17,7 @@ type AuthInfo struct {
 	Scope    string
 	Scopes   []string
 	Resource string
+	Tenant   string
 }
 
 // HasScope — true, если у токена есть указанный scope. Используется handlers'ами для per-tool ACL.
@@ -52,7 +53,8 @@ func (s *Server) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		access, err := s.storage.GetActiveAccessToken(r.Context(), token)
+		// Lookup ограничен своей базой: токен другого тенанта сюда не долетит даже теоретически.
+		access, err := s.storage.GetActiveAccessToken(r.Context(), s.cfg.Tenant, token)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				s.logger.Warn("oauth.token.refused", "reason", "not_found", "remote", clientIP(r))
@@ -64,13 +66,15 @@ func (s *Server) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Audience-привязка (RFC 8707): токен валиден только для канонического URL этого MCP-сервера
-		if access.Resource != "" && access.Resource != s.cfg.Resource {
+		// Audience-привязка (RFC 8707): токен валиден только для канонического URL MCP-сервера
+		// этой базы. Пустой resource — токен, выпущенный до мультитенантности: отвергаем,
+		// такой клиент должен пройти авторизацию заново.
+		if access.Resource != s.resource() {
 			s.logger.Warn("oauth.token.refused",
 				"reason", "audience_mismatch",
 				"remote", clientIP(r),
 				"sub", access.Sub,
-				"expected", s.cfg.Resource,
+				"expected", s.resource(),
 				"actual", access.Resource,
 			)
 			s.unauthorized(w, "invalid_token", "token audience does not match this resource")
@@ -83,15 +87,17 @@ func (s *Server) Middleware(next http.Handler) http.Handler {
 			Scope:    access.Scope,
 			Scopes:   ScopesFromString(access.Scope),
 			Resource: access.Resource,
+			Tenant:   access.Tenant,
 		}
 		next.ServeHTTP(w, r.WithContext(withAuth(r.Context(), info)))
 	})
 }
 
 // unauthorized отдаёт 401 с правильным WWW-Authenticate. resource_metadata указывает на
-// .well-known/oauth-protected-resource — клиент по нему построит OAuth-flow с нуля.
+// метаданные ресурса ЭТОЙ базы — клиент по ним построит OAuth-flow с нуля и попадёт
+// на AS нужного тенанта.
 func (s *Server) unauthorized(w http.ResponseWriter, code, description string) {
-	metaURL := s.publicURL() + "/.well-known/oauth-protected-resource"
+	metaURL := s.resourceMetadataURL()
 	header := `Bearer error="` + code + `", error_description="` + description + `", resource_metadata="` + metaURL + `"`
 	w.Header().Set("WWW-Authenticate", header)
 	writeOAuthError(w, http.StatusUnauthorized, code, description)

@@ -29,22 +29,24 @@ type AuthorizationServerMetadata struct {
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 }
 
-// HandleProtectedResourceMetadata — GET /.well-known/oauth-protected-resource.
-// MCP-клиент дёргает этот endpoint после получения 401 с WWW-Authenticate.
+// HandleProtectedResourceMetadata — метаданные ресурса этой базы (RFC 9728).
+// MCP-клиент дёргает их после 401 с WWW-Authenticate. Роутер вешает обработчик на два пути:
+// канонический /.well-known/oauth-protected-resource/{tenant}/mcp и совместимый
+// /{tenant}/.well-known/oauth-protected-resource.
 func (s *Server) HandleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
 	meta := ProtectedResourceMetadata{
-		Resource:               s.cfg.Resource,
-		AuthorizationServers:   []string{s.publicURL()},
+		Resource:               s.resource(),
+		AuthorizationServers:   []string{s.issuer()},
 		ScopesSupported:        s.cfg.SupportedScopes,
 		BearerMethodsSupported: []string{"header"},
 	}
 	writeJSON(w, http.StatusOK, meta)
 }
 
-// HandleAuthorizationServerMetadata — GET /.well-known/oauth-authorization-server.
-// MCP-клиент использует это для построения OAuth-flow.
+// HandleAuthorizationServerMetadata — метаданные AS этой базы (RFC 8414).
+// Issuer содержит слаг, поэтому у каждой базы свой AS и свои client_id.
 func (s *Server) HandleAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
-	base := s.publicURL()
+	base := s.issuer()
 	meta := AuthorizationServerMetadata{
 		Issuer:                            base,
 		AuthorizationEndpoint:             base + "/oauth/authorize",
