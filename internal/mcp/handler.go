@@ -54,6 +54,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("mcp request", "method", req.Method, "id", req.ID)
 
+	// Уведомление (JSON-RPC 2.0 §4.1): нет id — ответа быть не должно, даже об ошибке.
+	// Сюда попадает notifications/initialized, который шлёт каждый MCP-клиент после initialize.
+	// Раньше он проваливался в default и получал "Method not found" — формально нарушение спеки.
+	if req.ID == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	var resp *Response
 	switch req.Method {
 	case "initialize":
@@ -254,9 +262,9 @@ func authIdentity(auth *oauth.AuthInfo) (sub, clientID string) {
 }
 
 type resolveArgs struct {
-	Query         string `json:"query"`
-	Limit         int    `json:"limit"`
-	IncludeGroups bool   `json:"include_groups"`
+	Query         string   `json:"query"`
+	Limit         flexInt  `json:"limit"`
+	IncludeGroups flexBool `json:"include_groups"`
 }
 
 func (h *Handler) callResolveCustomer(r *http.Request, args any) (*CallToolResult, error) {
@@ -265,12 +273,9 @@ func (h *Handler) callResolveCustomer(r *http.Request, args any) (*CallToolResul
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
-	resp, err := h.onecClient.ResolveCustomer(r.Context(), a.Query, limit, a.IncludeGroups)
+	resp, err := h.onecClient.ResolveCustomer(r.Context(), a.Query, limit, bool(a.IncludeGroups))
 	if err != nil {
 		return nil, err
 	}
@@ -291,10 +296,7 @@ func (h *Handler) callResolveWarehouse(r *http.Request, args any) (*CallToolResu
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
 	resp, err := h.onecClient.ResolveWarehouse(r.Context(), a.Query, limit)
 	if err != nil {
@@ -317,12 +319,9 @@ func (h *Handler) callResolveProduct(r *http.Request, args any) (*CallToolResult
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
-	resp, err := h.onecClient.ResolveProduct(r.Context(), a.Query, limit, a.IncludeGroups)
+	resp, err := h.onecClient.ResolveProduct(r.Context(), a.Query, limit, bool(a.IncludeGroups))
 	if err != nil {
 		return nil, err
 	}
@@ -343,10 +342,7 @@ func (h *Handler) callResolveSalesChannel(r *http.Request, args any) (*CallToolR
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
 	resp, err := h.onecClient.ResolveSalesChannel(r.Context(), a.Query, limit)
 	if err != nil {
@@ -369,10 +365,7 @@ func (h *Handler) callResolveCash(r *http.Request, args any) (*CallToolResult, e
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
 	resp, err := h.onecClient.ResolveCash(r.Context(), a.Query, limit)
 	if err != nil {
@@ -395,12 +388,9 @@ func (h *Handler) callResolveCostArticle(r *http.Request, args any) (*CallToolRe
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
-	resp, err := h.onecClient.ResolveCostArticle(r.Context(), a.Query, limit, a.IncludeGroups)
+	resp, err := h.onecClient.ResolveCostArticle(r.Context(), a.Query, limit, bool(a.IncludeGroups))
 	if err != nil {
 		return nil, err
 	}
@@ -421,10 +411,7 @@ func (h *Handler) callResolveOperation(r *http.Request, args any) (*CallToolResu
 		return nil, err
 	}
 
-	limit := a.Limit
-	if limit <= 0 || limit > h.cfg.Limits.ResolveLimit {
-		limit = h.cfg.Limits.ResolveLimit
-	}
+	limit := h.clampLimit(a.Limit)
 
 	resp, err := h.onecClient.ResolveOperation(r.Context(), a.Query, limit)
 	if err != nil {
@@ -446,7 +433,7 @@ type cashBalanceArgs struct {
 	Filters  onec.CashFilters `json:"filters"`
 	GroupBy  []string         `json:"group_by"`
 	Measures []string         `json:"measures"`
-	Top      int              `json:"top"`
+	Top      flexInt          `json:"top"`
 	Sort     []onec.SortSpec  `json:"sort"`
 }
 
@@ -456,16 +443,14 @@ func (h *Handler) callCashBalance(r *http.Request, args any) (*CallToolResult, e
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.CashBalanceRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -489,7 +474,7 @@ type cashFlowArgs struct {
 	Filters  onec.CashFilters `json:"filters"`
 	GroupBy  []string         `json:"group_by"`
 	Measures []string         `json:"measures"`
-	Top      int              `json:"top"`
+	Top      flexInt          `json:"top"`
 	Sort     []onec.SortSpec  `json:"sort"`
 }
 
@@ -499,16 +484,14 @@ func (h *Handler) callCashFlow(r *http.Request, args any) (*CallToolResult, erro
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.CashFlowRequest{
 		Period:   a.Period,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -532,7 +515,7 @@ type settlementsArgs struct {
 	Filters  onec.SettlementsFilters `json:"filters"`
 	GroupBy  []string                `json:"group_by"`
 	Measures []string                `json:"measures"`
-	Top      int                     `json:"top"`
+	Top      flexInt                 `json:"top"`
 	Sort     []onec.SortSpec         `json:"sort"`
 }
 
@@ -542,16 +525,14 @@ func (h *Handler) callReceivablesBalance(r *http.Request, args any) (*CallToolRe
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.SettlementsRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -576,16 +557,14 @@ func (h *Handler) callPayablesBalance(r *http.Request, args any) (*CallToolResul
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.SettlementsRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -609,7 +588,7 @@ type purchasesArgs struct {
 	Filters  onec.PurchasesFilters `json:"filters"`
 	GroupBy  []string              `json:"group_by"`
 	Measures []string              `json:"measures"`
-	Top      int                   `json:"top"`
+	Top      flexInt               `json:"top"`
 	Sort     []onec.SortSpec       `json:"sort"`
 }
 
@@ -619,16 +598,14 @@ func (h *Handler) callPurchasesReport(r *http.Request, args any) (*CallToolResul
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.PurchasesRequest{
 		Period:   a.Period,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -652,7 +629,7 @@ type salesReportArgs struct {
 	Filters  onec.SalesFilters `json:"filters"`
 	GroupBy  []string          `json:"group_by"`
 	Measures []string          `json:"measures"`
-	Top      int               `json:"top"`
+	Top      flexInt           `json:"top"`
 	Sort     []onec.SortSpec   `json:"sort"`
 }
 
@@ -662,16 +639,14 @@ func (h *Handler) callSalesReport(r *http.Request, args any) (*CallToolResult, e
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.SalesReportRequest{
 		Period:   a.Period,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -695,7 +670,7 @@ type stockReportArgs struct {
 	Filters  onec.StockFilters `json:"filters"`
 	GroupBy  []string          `json:"group_by"`
 	Measures []string          `json:"measures"`
-	Top      int               `json:"top"`
+	Top      flexInt           `json:"top"`
 	Sort     []onec.SortSpec   `json:"sort"`
 }
 
@@ -705,16 +680,14 @@ func (h *Handler) callStockBalance(r *http.Request, args any) (*CallToolResult, 
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.StockReportRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -738,7 +711,7 @@ type availabilityReportArgs struct {
 	Filters  onec.AvailabilityFilters `json:"filters"`
 	GroupBy  []string                 `json:"group_by"`
 	Measures []string                 `json:"measures"`
-	Top      int                      `json:"top"`
+	Top      flexInt                  `json:"top"`
 	Sort     []onec.SortSpec          `json:"sort"`
 }
 
@@ -748,16 +721,14 @@ func (h *Handler) callAvailabilityReport(r *http.Request, args any) (*CallToolRe
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		a.Top = h.cfg.Limits.MaxRows
-	}
+	top := h.clampTop(a.Top)
 
 	req := &onec.AvailabilityReportRequest{
 		Period:   a.Period,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
 		Measures: a.Measures,
-		Top:      a.Top,
+		Top:      top,
 		Sort:     a.Sort,
 	}
 
@@ -802,7 +773,7 @@ type topProductsArgs struct {
 	Period  onec.Period       `json:"period"`
 	Filters onec.SalesFilters `json:"filters"`
 	By      string            `json:"by"`
-	Top     int               `json:"top"`
+	Top     flexInt           `json:"top"`
 }
 
 func (h *Handler) callTopProducts(r *http.Request, args any) (*CallToolResult, error) {
@@ -811,19 +782,13 @@ func (h *Handler) callTopProducts(r *http.Request, args any) (*CallToolResult, e
 		return nil, err
 	}
 
-	if a.Top <= 0 || a.Top > h.cfg.Limits.MaxRows {
-		if a.Top <= 0 {
-			a.Top = 10
-		} else {
-			a.Top = h.cfg.Limits.MaxRows
-		}
-	}
+	top := h.clampTopDefault(a.Top, 10)
 
 	req := &onec.TopProductsRequest{
 		Period:  a.Period,
 		Filters: a.Filters,
 		By:      a.By,
-		Top:     a.Top,
+		Top:     top,
 	}
 
 	resp, err := h.onecClient.TopProducts(r.Context(), req)
@@ -839,7 +804,7 @@ func (h *Handler) callTopProducts(r *http.Request, args any) (*CallToolResult, e
 type customerSummaryArgs struct {
 	CustomerID  string      `json:"customer_id"`
 	Period      onec.Period `json:"period"`
-	TopProducts int         `json:"top_products"`
+	TopProducts flexInt     `json:"top_products"`
 }
 
 func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResult, error) {
@@ -851,7 +816,7 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 	req := &onec.CustomerSummaryRequest{
 		CustomerID:  a.CustomerID,
 		Period:      a.Period,
-		TopProducts: a.TopProducts,
+		TopProducts: int(a.TopProducts),
 	}
 
 	resp, err := h.onecClient.CustomerSummary(r.Context(), req)
