@@ -100,10 +100,14 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	start := time.Now()
 
-	// отчётные эндпойнты (/mcp/reports/*) идут через клиент с увеличенным таймаутом;
-	// резолвы/auth остаются на коротком таймауте, чтобы быстро падать при недоступности 1С
+	// Тяжёлые эндпойнты идут через клиент с увеличенным таймаутом; резолвы/auth остаются на коротком,
+	// чтобы быстро падать при недоступности 1С.
+	//
+	// /mcp/admin/* — тоже тяжёлые: журнал регистрации сканируется последовательно, и выборка за сутки
+	// легко перебирает 8 секунд (сам инструмент об этом и предупреждает). На коротком таймауте она
+	// падала с невнятным «context deadline exceeded» вместо того, чтобы просто досчитаться.
 	httpClient := c.httpClient
-	if strings.HasPrefix(path, "/mcp/reports/") {
+	if strings.HasPrefix(path, "/mcp/reports/") || strings.HasPrefix(path, "/mcp/admin/") {
 		httpClient = c.httpReportClient
 	}
 
@@ -259,7 +263,13 @@ func (c *Client) ResolveCash(ctx context.Context, query string, limit int) (*Res
 }
 
 func (c *Client) ResolveCostArticle(ctx context.Context, query string, limit int, includeGroups bool) (*ResolveCostArticleResponse, error) {
-	if cached, ok := c.resolveCache.Get("cost_article", query, limit); ok {
+	// Ключ кэша обязан учитывать includeGroups (как у customer/product): без этого выдача без групп
+	// затирала выдачу с группами на весь TTL, и запрошенные UUID групп просто не возвращались.
+	cacheKey := "cost_article"
+	if includeGroups {
+		cacheKey = "cost_article+groups"
+	}
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
 		var resp ResolveCostArticleResponse
 		if err := json.Unmarshal(cached, &resp); err == nil {
 			return &resp, nil
@@ -273,7 +283,7 @@ func (c *Client) ResolveCostArticle(ctx context.Context, query string, limit int
 	}
 
 	if payload, err := json.Marshal(&resp); err == nil {
-		c.resolveCache.Set("cost_article", query, limit, payload)
+		c.resolveCache.Set(cacheKey, query, limit, payload)
 	}
 	return &resp, nil
 }
@@ -352,7 +362,7 @@ func (c *Client) ProductDetails(ctx context.Context, req *ProductDetailsRequest)
 	return resp, nil
 }
 
-func (c *Client) Receivables(ctx context.Context, req *SettlementsRequest) (*SettlementsResponse, error) {
+func (c *Client) Receivables(ctx context.Context, req *ReceivablesRequest) (*SettlementsResponse, error) {
 	var resp SettlementsResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/receivables", req, &resp); err != nil {
 		return nil, err
@@ -361,7 +371,7 @@ func (c *Client) Receivables(ctx context.Context, req *SettlementsRequest) (*Set
 	return &resp, nil
 }
 
-func (c *Client) Payables(ctx context.Context, req *SettlementsRequest) (*SettlementsResponse, error) {
+func (c *Client) Payables(ctx context.Context, req *PayablesRequest) (*SettlementsResponse, error) {
 	var resp SettlementsResponse
 	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/payables", req, &resp); err != nil {
 		return nil, err

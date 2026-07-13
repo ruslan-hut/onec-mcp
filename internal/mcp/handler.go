@@ -172,6 +172,24 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		})
 	}
 
+	// Меры по закупочной стоимости закрыты отдельным правом. Раньше оно жило только в схеме
+	// (stripCostMeasures вырезает их из enum в tools/list), а вызов не проверялся вовсе: клиент,
+	// проигнорировавший схему, спокойно просил measures:["profit"]. Единственной защитой оставался
+	// заголовок X-MCP-Scopes на стороне 1С — которого в режиме статического токена вообще нет.
+	if auth != nil && !auth.HasScope(ScopeReportCost) {
+		if blocked := costMeasuresIn(params.Arguments); len(blocked) > 0 {
+			h.logger.Warn("oauth.scope.denied",
+				"tool", params.Name, "required", ScopeReportCost, "sub", auth.Sub, "measures", blocked)
+			h.auditToolCall(auth, params.Name, false, "scope_denied", started)
+			return NewResponse(req.ID, &CallToolResult{
+				Content: []ContentBlock{TextContent(
+					fmt.Sprintf("permission denied: measures %v require scope %q", blocked, ScopeReportCost),
+				)},
+				IsError: true,
+			})
+		}
+	}
+
 	var result *CallToolResult
 	var err error
 
@@ -429,12 +447,12 @@ func (h *Handler) callResolveOperation(r *http.Request, args any) (*CallToolResu
 }
 
 type cashBalanceArgs struct {
-	Date     string           `json:"date"`
-	Filters  onec.CashFilters `json:"filters"`
-	GroupBy  []string         `json:"group_by"`
-	Measures []string         `json:"measures"`
-	Top      flexInt          `json:"top"`
-	Sort     []onec.SortSpec  `json:"sort"`
+	Date     string                  `json:"date"`
+	Filters  onec.CashBalanceFilters `json:"filters"`
+	GroupBy  []string                `json:"group_by"`
+	Measures []string                `json:"measures"`
+	Top      flexInt                 `json:"top"`
+	Sort     []onec.SortSpec         `json:"sort"`
 }
 
 func (h *Handler) callCashBalance(r *http.Request, args any) (*CallToolResult, error) {
@@ -510,24 +528,35 @@ func (h *Handler) callCashFlow(r *http.Request, args any) (*CallToolResult, erro
 	}, nil
 }
 
-type settlementsArgs struct {
+// Аргументы ДЗ и КЗ различаются только именем ключа контрагента (customer_ids / supplier_ids):
+// отдельные типы вместо одного общего — чтобы ключ чужой роли не мог попасть в тело запроса к 1С.
+type receivablesArgs struct {
 	Date     string                  `json:"date"`
-	Filters  onec.SettlementsFilters `json:"filters"`
+	Filters  onec.ReceivablesFilters `json:"filters"`
 	GroupBy  []string                `json:"group_by"`
 	Measures []string                `json:"measures"`
 	Top      flexInt                 `json:"top"`
 	Sort     []onec.SortSpec         `json:"sort"`
 }
 
+type payablesArgs struct {
+	Date     string               `json:"date"`
+	Filters  onec.PayablesFilters `json:"filters"`
+	GroupBy  []string             `json:"group_by"`
+	Measures []string             `json:"measures"`
+	Top      flexInt              `json:"top"`
+	Sort     []onec.SortSpec      `json:"sort"`
+}
+
 func (h *Handler) callReceivablesBalance(r *http.Request, args any) (*CallToolResult, error) {
-	var a settlementsArgs
+	var a receivablesArgs
 	if err := mapToStruct(args, &a); err != nil {
 		return nil, err
 	}
 
 	top := h.clampTop(a.Top)
 
-	req := &onec.SettlementsRequest{
+	req := &onec.ReceivablesRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
@@ -552,14 +581,14 @@ func (h *Handler) callReceivablesBalance(r *http.Request, args any) (*CallToolRe
 }
 
 func (h *Handler) callPayablesBalance(r *http.Request, args any) (*CallToolResult, error) {
-	var a settlementsArgs
+	var a payablesArgs
 	if err := mapToStruct(args, &a); err != nil {
 		return nil, err
 	}
 
 	top := h.clampTop(a.Top)
 
-	req := &onec.SettlementsRequest{
+	req := &onec.PayablesRequest{
 		Date:     a.Date,
 		Filters:  a.Filters,
 		GroupBy:  a.GroupBy,
@@ -770,10 +799,10 @@ func (h *Handler) callProductDetails(r *http.Request, args any) (*CallToolResult
 }
 
 type topProductsArgs struct {
-	Period  onec.Period       `json:"period"`
-	Filters onec.SalesFilters `json:"filters"`
-	By      string            `json:"by"`
-	Top     flexInt           `json:"top"`
+	Period  onec.Period             `json:"period"`
+	Filters onec.TopProductsFilters `json:"filters"`
+	By      string                  `json:"by"`
+	Top     flexInt                 `json:"top"`
 }
 
 func (h *Handler) callTopProducts(r *http.Request, args any) (*CallToolResult, error) {
@@ -813,10 +842,12 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 		return nil, err
 	}
 
+	// top_products — такой же счётчик строк, как top в остальных отчётах, и клэмпится так же:
+	// без этого отрицательное или заведомо огромное значение уезжало в 1С как есть.
 	req := &onec.CustomerSummaryRequest{
 		CustomerID:  a.CustomerID,
 		Period:      a.Period,
-		TopProducts: int(a.TopProducts),
+		TopProducts: h.clampTopDefault(a.TopProducts, 5),
 	}
 
 	resp, err := h.onecClient.CustomerSummary(r.Context(), req)
@@ -831,9 +862,11 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 
 // callEventLog обслуживает event_log и object_history — оба ходят в один админ-эндпоинт
 // чтения журнала регистрации. Аргументы инструмента прокидываются в 1С без переупаковки
-// (1С сама разбирает user/session/level/events/object_type/object_id/period/limit).
+// (1С сама разбирает user/session/level/events/object_type/object_id/period/limit),
+// но через unstringifyJSON: админские инструменты шли мимо него, и двойное кодирование period —
+// то самое, ради которого он написан, — ломало ровно эти три вызова, а не остальные.
 func (h *Handler) callEventLog(r *http.Request, args any) (*CallToolResult, error) {
-	resp, err := h.onecClient.EventLog(r.Context(), args)
+	resp, err := h.onecClient.EventLog(r.Context(), unstringifyJSON(args))
 	if err != nil {
 		return nil, err
 	}
@@ -844,7 +877,7 @@ func (h *Handler) callEventLog(r *http.Request, args any) (*CallToolResult, erro
 }
 
 func (h *Handler) callFindDocument(r *http.Request, args any) (*CallToolResult, error) {
-	resp, err := h.onecClient.FindDocument(r.Context(), args)
+	resp, err := h.onecClient.FindDocument(r.Context(), unstringifyJSON(args))
 	if err != nil {
 		return nil, err
 	}
@@ -852,6 +885,36 @@ func (h *Handler) callFindDocument(r *http.Request, args any) (*CallToolResult, 
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
+}
+
+// costMeasuresIn возвращает запрошенные меры, закрытые правом mcp:report:cost.
+// Аргументы разбираются как есть (map от json.Unmarshal), с поправкой на двойное кодирование:
+// measures может приехать строкой "[\"profit\"]" — тогда его развернёт unstringifyJSON.
+func costMeasuresIn(args any) []string {
+	m, ok := unstringifyJSON(args).(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	raw, ok := m["measures"].([]any)
+	if !ok {
+		return nil
+	}
+
+	blocked := make(map[string]bool, len(CostMeasures))
+	for _, name := range CostMeasures {
+		blocked[name] = true
+	}
+
+	var found []string
+	for _, v := range raw {
+		name, ok := v.(string)
+		if ok && blocked[name] {
+			found = append(found, name)
+		}
+	}
+
+	return found
 }
 
 // stripCostMeasures удаляет cost/profit/margin из enum мер инструмента sales_report.

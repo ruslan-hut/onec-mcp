@@ -183,10 +183,26 @@ type Column struct {
 	Type string `json:"type"`
 }
 
+// ReportEcho — то, чем 1С сопровождает выборку: разобранный период (или дата остатков), роль
+// в отчёте взаиморасчётов и эхо реально применённых фильтров. Отчёты декодируются в типизированные
+// структуры, поэтому без явных полей эти данные молча терялись при пересборке ответа — а схемы
+// инструментов их обещают, и агенту они нужны, чтобы убедиться, что фильтр действительно применён
+// (1С, например, нормализует период к границам суток и разворачивает группы контрагентов).
+//
+// Поля сырые: форма applied_filters у каждого отчёта своя (customers/warehouses/cashes/…),
+// типизировать её здесь незачем — гейт ничего в ней не считает, только прокидывает наверх.
+type ReportEcho struct {
+	Period         json.RawMessage `json:"period,omitempty"`
+	Date           string          `json:"date,omitempty"`
+	Role           string          `json:"role,omitempty"`
+	AppliedFilters json.RawMessage `json:"applied_filters,omitempty"`
+}
+
 type SalesReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+	ReportEcho
 }
 
 type StockFilters struct {
@@ -221,6 +237,7 @@ type StockReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+	ReportEcho
 }
 
 type AvailabilityFilters struct {
@@ -261,20 +278,50 @@ type ResolveCashResponse struct {
 	Candidates []CashCandidate `json:"candidates"`
 }
 
-// CashFilters — общий фильтр для денежных отчётов. CashIDs — UUID касс (resolve_cash);
-// для cash_flow применяется к измерению Счет, для cash_balance — к измерению Касса.
-// Остальные поля используются только в cash_flow (фильтры по измерениям ВидОперации и Аналитика):
+// CashFilters — фильтр отчёта движения денег (cash_flow).
 //
+//	CashIDs        — кассы (resolve_cash), измерение Счет;
 //	OperationIDs   — виды операций (resolve_operation), измерение ВидОперации;
 //	CostArticleIDs — статьи затрат (resolve_cost_article), аналитика, IN HIERARCHY;
 //	CustomerIDs    — контрагенты (resolve_customer), аналитика, IN.
 //
 // CostArticleIDs и CustomerIDs объединяются по аналитике через OR.
+//
+// Раньше эту же структуру использовал и cash_balance, у которого из всего набора применим только
+// CashIDs (у регистра ДеньгиВКассе одно измерение). Остальные ключи молча уезжали в 1С и там
+// игнорировались: агент считал выборку отфильтрованной, а получал полную. У каждого инструмента
+// теперь свой тип фильтра — тело запроса не может содержать ключ, которого нет в схеме инструмента.
 type CashFilters struct {
 	CashIDs        []string `json:"cash_ids,omitempty"`
 	OperationIDs   []string `json:"operation_ids,omitempty"`
 	CostArticleIDs []string `json:"cost_article_ids,omitempty"`
 	CustomerIDs    []string `json:"customer_ids,omitempty"`
+}
+
+func (f *CashFilters) UnmarshalJSON(data []byte) error {
+	type alias CashFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = CashFilters(a)
+	return nil
+}
+
+// CashBalanceFilters — фильтр остатков в кассах (cash_balance). Только кассы: разрезать остаток
+// по видам операций или аналитике нечем, у регистра ДеньгиВКассе единственное измерение Касса.
+type CashBalanceFilters struct {
+	CashIDs []string `json:"cash_ids,omitempty"`
+}
+
+func (f *CashBalanceFilters) UnmarshalJSON(data []byte) error {
+	type alias CashBalanceFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = CashBalanceFilters(a)
+	return nil
 }
 
 type CostArticleCandidate struct {
@@ -299,12 +346,12 @@ type ResolveOperationResponse struct {
 }
 
 type CashBalanceRequest struct {
-	Date     string      `json:"date,omitempty"`
-	Filters  CashFilters `json:"filters,omitempty"`
-	GroupBy  []string    `json:"group_by,omitempty"`
-	Measures []string    `json:"measures,omitempty"`
-	Top      int         `json:"top,omitempty"`
-	Sort     []SortSpec  `json:"sort,omitempty"`
+	Date     string             `json:"date,omitempty"`
+	Filters  CashBalanceFilters `json:"filters,omitempty"`
+	GroupBy  []string           `json:"group_by,omitempty"`
+	Measures []string           `json:"measures,omitempty"`
+	Top      int                `json:"top,omitempty"`
+	Sort     []SortSpec         `json:"sort,omitempty"`
 }
 
 type CashFlowRequest struct {
@@ -320,13 +367,32 @@ type CashReportResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+	ReportEcho
+}
+
+// TopProductsFilters — фильтр топа товаров. Подмножество SalesFilters: обёртка над sales-отчётом
+// объявляет в схеме только контрагентов и склады, поэтому канал/когорта/статус сюда не проходят
+// (раньше проходили — структура была общая с sales_report).
+type TopProductsFilters struct {
+	CustomerIDs  []string `json:"customer_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+}
+
+func (f *TopProductsFilters) UnmarshalJSON(data []byte) error {
+	type alias TopProductsFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = TopProductsFilters(a)
+	return nil
 }
 
 type TopProductsRequest struct {
-	Period  Period       `json:"period"`
-	Filters SalesFilters `json:"filters,omitempty"`
-	By      string       `json:"by,omitempty"`
-	Top     int          `json:"top,omitempty"`
+	Period  Period             `json:"period"`
+	Filters TopProductsFilters `json:"filters,omitempty"`
+	By      string             `json:"by,omitempty"`
+	Top     int                `json:"top,omitempty"`
 }
 
 type CustomerSummaryRequest struct {
@@ -335,33 +401,69 @@ type CustomerSummaryRequest struct {
 	TopProducts int    `json:"top_products,omitempty"`
 }
 
-// SettlementsFilters — фильтр отчётов взаиморасчётов (receivables / payables).
-// CustomerIDs / SupplierIDs — UUID контрагентов (оба резолвятся через resolve_customer:
-// поставщики тоже лежат в справочнике Контрагенты). 1С берёт ключ по роли отчёта (customer_ids
-// для receivables, supplier_ids для payables), с запасным customer_ids. Применяется через IN HIERARCHY.
-// FirmIDs — UUID фирм (UA/PL юрлиц); измерение Фирма, применяется через IN. UUID фирмы можно взять
-// из group_by=["firm"] предыдущего вызова (отдельного резолвера фирм нет — их единицы).
-type SettlementsFilters struct {
+// ReceivablesFilters / PayablesFilters — фильтры отчётов взаиморасчётов. Ключ контрагента
+// именуется по роли отчёта: customer_ids у ДЗ, supplier_ids у КЗ (и те и другие — справочник
+// Контрагенты, резолвятся через resolve_customer; применяются через IN HIERARCHY).
+// FirmIDs — UUID фирм (UA/PL юрлиц), измерение Фирма, IN. UUID фирмы берётся из group_by=["firm"]
+// предыдущего вызова — отдельного резолвера фирм нет, их единицы.
+//
+// Типы раздельные, потому что общая структура пропускала в тело запроса ключ чужой роли
+// (supplier_ids в receivables и наоборот) — ключ, которого нет в схеме инструмента.
+type ReceivablesFilters struct {
 	CustomerIDs []string `json:"customer_ids,omitempty"`
+	FirmIDs     []string `json:"firm_ids,omitempty"`
+}
+
+func (f *ReceivablesFilters) UnmarshalJSON(data []byte) error {
+	type alias ReceivablesFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = ReceivablesFilters(a)
+	return nil
+}
+
+type PayablesFilters struct {
 	SupplierIDs []string `json:"supplier_ids,omitempty"`
 	FirmIDs     []string `json:"firm_ids,omitempty"`
 }
 
-// SettlementsRequest — тело POST /mcp/reports/{receivables|payables}.
+func (f *PayablesFilters) UnmarshalJSON(data []byte) error {
+	type alias PayablesFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = PayablesFilters(a)
+	return nil
+}
+
+// ReceivablesRequest / PayablesRequest — тело POST /mcp/reports/{receivables|payables}.
 // Развёрнутые остатки взаиморасчётов на дату по регистру «Взаиморасчеты».
-type SettlementsRequest struct {
+type ReceivablesRequest struct {
 	Date     string             `json:"date,omitempty"`
-	Filters  SettlementsFilters `json:"filters,omitempty"`
+	Filters  ReceivablesFilters `json:"filters,omitempty"`
 	GroupBy  []string           `json:"group_by,omitempty"`
 	Measures []string           `json:"measures,omitempty"`
 	Top      int                `json:"top,omitempty"`
 	Sort     []SortSpec         `json:"sort,omitempty"`
 }
 
+type PayablesRequest struct {
+	Date     string          `json:"date,omitempty"`
+	Filters  PayablesFilters `json:"filters,omitempty"`
+	GroupBy  []string        `json:"group_by,omitempty"`
+	Measures []string        `json:"measures,omitempty"`
+	Top      int             `json:"top,omitempty"`
+	Sort     []SortSpec      `json:"sort,omitempty"`
+}
+
 type SettlementsResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+	ReportEcho
 }
 
 // PurchasesFilters — фильтр отчёта закупок (purchases_report).
@@ -370,6 +472,16 @@ type SettlementsResponse struct {
 type PurchasesFilters struct {
 	SupplierIDs []string `json:"supplier_ids,omitempty"`
 	FirmIDs     []string `json:"firm_ids,omitempty"`
+}
+
+func (f *PurchasesFilters) UnmarshalJSON(data []byte) error {
+	type alias PurchasesFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = PurchasesFilters(a)
+	return nil
 }
 
 // PurchasesRequest — тело POST /mcp/reports/purchases.
@@ -387,6 +499,7 @@ type PurchasesResponse struct {
 	Columns []Column               `json:"columns"`
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
+	ReportEcho
 }
 
 // AuthVerifyRequest — тело POST /mcp/auth/verify к 1С.

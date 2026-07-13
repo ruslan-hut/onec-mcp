@@ -1,6 +1,7 @@
 package onec
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,10 +41,7 @@ func (c *resolveCache) key(entity, query string, limit int) string {
 	b.WriteString(strings.ToLower(strings.TrimSpace(query)))
 	b.WriteByte('|')
 	// limit меняет размер ответа, поэтому участвует в ключе
-	for limit > 0 {
-		b.WriteByte('0' + byte(limit%10))
-		limit /= 10
-	}
+	b.WriteString(strconv.Itoa(limit))
 	return b.String()
 }
 
