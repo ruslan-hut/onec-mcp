@@ -98,10 +98,19 @@ storage lookup, an audience check in `oauth.Server.Middleware` (a token minted f
 
 ### MCP Tools
 
-Three tools are exposed via `tools/list`:
-- `resolve_customer` - Search customers by query string
-- `resolve_warehouse` - Search warehouses by query string
-- `sales_report` - Generate sales report with period, filters, grouping
+Tools live in `internal/mcp/tools.go` (definitions + `ToolScopes`); the dispatch is the `switch`
+in `handleToolsCall`. They come in families, each closed by one scope:
+- resolvers (`resolve_customer`, `resolve_warehouse`, `resolve_product`, …) — `mcp:resolve`
+- sales (`sales_report`, `top_products`, `customer_summary`) — `mcp:report:sales`
+- stock (`stock_balance`, `availability_report`) — `mcp:report:stock`
+- money (`cash_*`, `receivables_balance`, `payables_balance`, `purchases_report`) — `mcp:report:money`
+- production (`product_specification`, `specification_*`, `production_*`) — `mcp:report:cost`
+- admin (`event_log`, `object_history`, `find_document`) — `mcp:admin:eventlog`
+
+Adding a tool means: a constant, a `ToolScopes` entry (a tool missing from the map is rejected as
+unknown), a definition in `GetTools`, a `case` in the dispatch, and the matching branch in the 1C
+side's `ScopeForReport` — the gate's scope map and 1C's must agree, since 1C re-checks the
+`X-MCP-Scopes` header. See `docs/api.md` for the user-facing argument reference.
 
 ## Configuration
 

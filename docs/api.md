@@ -612,6 +612,168 @@ DPO denominator. Amounts are in the document currency.
 
 ---
 
+## Production Tools (bills of materials & manufacturing)
+
+Nine tools gated by the **`mcp:report:cost`** scope — the same permission that unlocks the
+`cost` / `profit` / `margin` measures of `sales_report`. A bill of materials is the product's
+recipe and the production reports expose the cost of raw material in every item, so they carry
+the same sensitivity as purchase prices; no separate scope was introduced.
+
+A composition is identified by **four** keys: product + `matrix_id` (матрица) +
+`composition_type_id` (тип состава) + `production_group_id` (группировка производства). Omit the
+three modifiers and every variant comes back — each row carries them as columns, so check them
+before summing. There are no resolvers for those three catalogs: take their UUIDs from a
+`production_output` call with `group_by=["matrix"]` (etc.).
+
+Known limits of the underlying configuration, worth stating before the user asks: there is no
+waste accounting (the Отходы table of the production document carries no fields at all) and no
+labour or overhead in production — the cost of output is materials only.
+
+### `product_specification`
+
+Bill of materials as of a date: which materials go into a product and at what rate.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `product_id` | string | Yes\* | Product UUID (from `resolve_product`). |
+| `product_ids` | array | Yes\* | Several products at once. Leaf products only — group UUIDs do not match. |
+| `date` | string | No | Composition as of this date (YYYY-MM-DD). Defaults to now. |
+| `qty` | number | No | Product quantity to scale `qty_total` by (default 1; may be fractional). |
+| `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Narrow to one variant of the composition. |
+
+\* one of `product_id` / `product_ids`.
+
+Columns: `product`, `material`, `article`, `unit`, `qty_per_unit`, `qty_total`, `is_main_raw`,
+`matrix`, `composition_type`, `production_group`, `spec_date`, `spec_document`.
+
+### `specification_cost`
+
+The same rows valued at material prices: adds `price` and `amount` (= `qty_total` × `price`) with
+an `amount` total. This is the **planned** cost from the composition — for the actual cost of a
+run use `production_document`.
+
+Arguments as in `product_specification`, plus `price_type_id` (defaults to «ЦенаЗакупки», the
+same price type the production document itself uses).
+
+### `specification_explode`
+
+Multi-level explosion: any material that has its own composition is expanded further, down to raw
+materials. Rows are flat with `level` (1 = direct materials) and `path` (chain from the top
+product), plus `has_spec` — whether a material is itself expandable.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `product_id` | string | Yes | Product to explode. |
+| `date` | string | No | Compositions as of this date. |
+| `qty` | number | No | Quantity of the top product (default 1); scales `qty_total` on every level. |
+| `max_depth` | integer | No | Levels to expand (default 3, max 10). |
+| `with_cost` | boolean | No | Add `price` / `amount`. |
+| `price_type_id` | string | No | Price type for `with_cost`. |
+| `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Applied to the **top level only**. |
+
+The modifiers deliberately do not propagate: a semi-finished item may have its composition
+registered under a different matrix, and filtering deeper levels would silently truncate the tree.
+Recursion also stops on a cycle (a material already seen in the same branch) and at 2000 rows —
+check the `truncated` flag.
+
+### `specification_where_used`
+
+Reverse explosion: which products contain a given material and at what rate. Use it for impact
+questions ("this raw material got more expensive — what is affected"). Only **current**
+compositions are returned: a material dropped by a newer «СпецификацияМатериалов» document does
+not appear, even though its old record still lives in the register slice.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `material_id` / `material_ids` | string / array | Yes | Material UUIDs (from `resolve_product` — raw materials share the product catalog). |
+| `date` | string | No | Compositions as of this date. |
+| `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Narrow to one variant. |
+| `limit` | integer | No | Max rows (default 100, max 500). |
+
+### `specification_versions`
+
+Change history of a composition — one version per «СпецификацияМатериалов» document, newest
+first, each with its material list and a diff against the previous version **of the same
+variant** (variants live in parallel; comparing across them is meaningless).
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `product_id` | string | Yes | Product UUID. |
+| `period.from` / `period.to` | string | No | Window to limit history to. Omit for the whole history. |
+| `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Narrow to one variant. |
+| `limit` | integer | No | Max versions (default 10, max 50). |
+
+Unlike the rest, the result is not a `columns`/`rows` table but
+`{product, total_versions, versions:[{date, document, matrix, composition_type, production_group, materials[], changes:{added,removed,changed}, is_first}]}`.
+
+### `specification_list`
+
+Inventory of compositions — one row per variant: `product`, `matrix`, `composition_type`,
+`production_group`, `materials_count`, `spec_date`, `spec_document` (plus `total_variants` and
+`truncated`).
+
+With `missing_only: true` it flips around and lists products that were **produced in `period` but
+have no composition** — the usual cause of the «Не задан состав для продукции» error when filling
+materials in a production document. Columns then are `product`, `produced_qty`, `documents`,
+`last_production_date`, and only assembly operations are counted.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `missing_only` | boolean | No | Switch to the "produced without a composition" mode. |
+| `period.from` / `period.to` | string | No | Production period for `missing_only` (defaults to today — pass it explicitly). |
+| `date` | string | No | Compositions as of this date. |
+| `product_ids` | array | No | Narrow to these products. |
+| `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Narrow to one variant. |
+| `limit` | integer | No | Max rows (default 200, max 500; 100 in `missing_only` mode). |
+
+### `production_output` / `production_consumption`
+
+Turnover from posted «Производство» documents for a period. `production_output` reads the
+Продукция table (what was manufactured), `production_consumption` reads the Материалы table (what
+was written off). The Материалы table carries both the material and the product it was consumed
+for, so `material` + `product` in `group_by` gives material cost per manufactured item.
+
+Both default to **assembly only**. Disassembly is the mirror operation — there the Продукция
+table holds what was taken apart and Материалы is what came out — so summing both into one
+"produced" figure is wrong. The effective value is always echoed in `applied_filters`.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
+| `operation_type` | string | No | `assembly` (default), `disassembly`, `all`. |
+| `filters.product_ids` | array | No | Manufactured item UUIDs; group UUIDs applied via IN HIERARCHY. In `production_consumption` this filters the product a material was consumed **for**. |
+| `filters.material_ids` | array | No | `production_consumption` only. |
+| `filters.warehouse_ids` | array | No | Склад продукции for output, склад материалов for consumption. |
+| `filters.employee_ids` | array | No | `production_output` only. |
+| `filters.matrix_ids`, `composition_type_ids`, `production_group_ids`, `firm_ids` | array | No | UUIDs from a prior call grouped by that dimension. |
+| `group_by` | array | No | `product`, `product_group`, `warehouse`, `matrix`, `composition_type`, `production_group`, `firm`, `operation`, `document`, `day`, `week`, `month`; `employee` (output only); `material`, `material_group` (consumption only). Default: `product`/`material` + `month`. |
+| `measures` | array | No | `qty`, `amount` (incl. VAT), `amount_novat`, `documents`; output also `qty_plan`, `raw_qty_plan`, `qty_variance` (fact − plan). Default: `qty`, `amount`. |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`; field must be a selected dimension or measure. |
+
+> NOTE: plan fields are not always filled in — a zero `qty_plan` means "not planned", not "zero
+> output". Amounts are the sums entered in the document, **not** the FIFO cost batch accounting
+> actually wrote off; for that use `production_document`.
+
+### `production_document`
+
+Full detail of one production run: header, both tables and its actual register movements. Get the
+UUID from `production_output` / `production_consumption` with `group_by=["document"]`, or from
+`find_document`.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `document_id` | string | Yes | UUID of the «Производство» document. |
+
+Returns `{document, products[], materials[], movements[], summary}`. `movements` are the real
+«ОстаткиТоваров» postings (`direction` expense/receipt, warehouse, product, batch, qty, amount).
+In `summary`, `cost_written_off` is the **actual FIFO cost** of the materials consumed (computed
+by batch accounting) and `cost_received` is what was capitalised for the output; `difference` is
+the gap between them, while `output_amount` / `materials_amount` are the sums as typed into the
+document. Those two pairs differing is normal, not an error.
+
+---
+
 ## Admin Tools (event log)
 
 Three tools for event-log analysis, all gated by the **`mcp:admin:eventlog`** scope (the log

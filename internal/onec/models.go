@@ -502,6 +502,85 @@ type PurchasesResponse struct {
 	ReportEcho
 }
 
+// Производственный блок: типы отчётов 1С (последний сегмент пути /mcp/reports/{type}).
+// Значения приходят только из этих констант — путь наружу не параметризуется.
+const (
+	ReportSpecification          = "specification"
+	ReportSpecificationCost      = "specification_cost"
+	ReportSpecificationExplode   = "specification_explode"
+	ReportSpecificationWhereUsed = "specification_where_used"
+	ReportSpecificationVersions  = "specification_versions"
+	ReportSpecificationList      = "specification_list"
+	ReportProductionOutput       = "production_output"
+	ReportProductionConsumption  = "production_consumption"
+	ReportProductionDocument     = "production_document"
+)
+
+// SpecificationRequest — общее тело запросов по спецификациям (шесть инструментов делят один
+// набор параметров, каждый читает нужное подмножество; лишние ключи 1С игнорирует).
+// Состав однозначно определяется четвёркой Продукция × Матрица × ТипСостава × ГруппировкаПроизводства,
+// поэтому три «разреза» присутствуют во всех инструментах блока.
+type SpecificationRequest struct {
+	Date              string   `json:"date,omitempty"`
+	ProductID         string   `json:"product_id,omitempty"`
+	ProductIDs        []string `json:"product_ids,omitempty"`
+	MaterialID        string   `json:"material_id,omitempty"`
+	MaterialIDs       []string `json:"material_ids,omitempty"`
+	MatrixID          string   `json:"matrix_id,omitempty"`
+	CompositionTypeID string   `json:"composition_type_id,omitempty"`
+	ProductionGroupID string   `json:"production_group_id,omitempty"`
+	PriceTypeID       string   `json:"price_type_id,omitempty"`
+	Qty               float64  `json:"qty,omitempty"`
+	MaxDepth          int      `json:"max_depth,omitempty"`
+	WithCost          bool     `json:"with_cost,omitempty"`
+	MissingOnly       bool     `json:"missing_only,omitempty"`
+	// Period нужен только specification_versions (окно истории) и specification_list
+	// с missing_only (период выпуска). Указатель — чтобы не слать пустой объект остальным.
+	Period *Period `json:"period,omitempty"`
+	Limit  int     `json:"limit,omitempty"`
+}
+
+// ProductionFilters — фильтры отчётов по документам Производство.
+// MaterialIDs применим только к секции consumption, EmployeeIDs — только к output;
+// 1С молча игнорирует неприменимый к секции фильтр.
+type ProductionFilters struct {
+	ProductIDs         []string `json:"product_ids,omitempty"`
+	MaterialIDs        []string `json:"material_ids,omitempty"`
+	WarehouseIDs       []string `json:"warehouse_ids,omitempty"`
+	EmployeeIDs        []string `json:"employee_ids,omitempty"`
+	MatrixIDs          []string `json:"matrix_ids,omitempty"`
+	CompositionTypeIDs []string `json:"composition_type_ids,omitempty"`
+	ProductionGroupIDs []string `json:"production_group_ids,omitempty"`
+	FirmIDs            []string `json:"firm_ids,omitempty"`
+}
+
+func (f *ProductionFilters) UnmarshalJSON(data []byte) error {
+	type alias ProductionFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = ProductionFilters(a)
+	return nil
+}
+
+// ProductionReportRequest — тело POST /mcp/reports/production_output|production_consumption.
+// Секция задана самим эндпойнтом, поэтому в теле её нет.
+type ProductionReportRequest struct {
+	Period        Period            `json:"period"`
+	OperationType string            `json:"operation_type,omitempty"`
+	Filters       ProductionFilters `json:"filters,omitempty"`
+	GroupBy       []string          `json:"group_by,omitempty"`
+	Measures      []string          `json:"measures,omitempty"`
+	Top           int               `json:"top,omitempty"`
+	Sort          []SortSpec        `json:"sort,omitempty"`
+}
+
+// ProductionDocumentRequest — тело POST /mcp/reports/production_document.
+type ProductionDocumentRequest struct {
+	DocumentID string `json:"document_id"`
+}
+
 // AuthVerifyRequest — тело POST /mcp/auth/verify к 1С.
 type AuthVerifyRequest struct {
 	Key string `json:"key"`

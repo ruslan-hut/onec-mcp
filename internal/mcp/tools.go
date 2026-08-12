@@ -22,12 +22,26 @@ const (
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
+
+	// Производственный блок: спецификации (нормы расхода) и документы Производство.
+	ToolProductSpecification     = "product_specification"
+	ToolSpecificationCost        = "specification_cost"
+	ToolSpecificationExplode     = "specification_explode"
+	ToolSpecificationWhereUsed   = "specification_where_used"
+	ToolSpecificationVersions    = "specification_versions"
+	ToolSpecificationList        = "specification_list"
+	ToolProductionOutput         = "production_output"
+	ToolProductionConsumption    = "production_consumption"
+	ToolProductionDocumentDetail = "production_document"
 )
 
-// ScopeReportCost — measure-level scope: доступ к закупочной стоимости / прибыли / марже
-// в sales_report. Не привязан к отдельному инструменту (это меры внутри sales_report),
-// поэтому отсутствует в ToolScopes; проверяется при фильтрации схемы в handleToolsList,
-// а финально — на стороне 1С по заголовку X-MCP-Scopes (defense in depth).
+// ScopeReportCost — доступ к себестоимости. Исторически это measure-level право (меры
+// cost/profit/margin внутри sales_report), поэтому оно проверяется отдельно от ToolScopes
+// при фильтрации схемы в handleToolsList. Начиная с производственного блока это ещё и
+// tool-level scope: нормы расхода сырья и себестоимость выпуска — та же чувствительная
+// информация, что и закупочные цены, поэтому производственные инструменты закрыты им же
+// (см. ToolScopes ниже). Финально право проверяется на стороне 1С по заголовку
+// X-MCP-Scopes (defense in depth).
 const ScopeReportCost = "mcp:report:cost"
 
 // CostMeasures — меры sales_report, закрытые правом ScopeReportCost. Должны быть синхронны
@@ -67,6 +81,17 @@ var ToolScopes = map[string]string{
 	ToolEventLog:      "mcp:admin:eventlog",
 	ToolObjectHistory: "mcp:admin:eventlog",
 	ToolFindDocument:  "mcp:admin:eventlog",
+	// Производственный блок целиком закрыт правом на себестоимость: спецификация раскрывает
+	// рецептуру продукта, а отчёты по выпуску — стоимость сырья в каждом изделии.
+	ToolProductSpecification:     ScopeReportCost,
+	ToolSpecificationCost:        ScopeReportCost,
+	ToolSpecificationExplode:     ScopeReportCost,
+	ToolSpecificationWhereUsed:   ScopeReportCost,
+	ToolSpecificationVersions:    ScopeReportCost,
+	ToolSpecificationList:        ScopeReportCost,
+	ToolProductionOutput:         ScopeReportCost,
+	ToolProductionConsumption:    ScopeReportCost,
+	ToolProductionDocumentDetail: ScopeReportCost,
 }
 
 func GetTools() []Tool {
@@ -889,5 +914,317 @@ func GetTools() []Tool {
 				"required": []string{"doc_type"},
 			},
 		},
+		{
+			Name: ToolProductSpecification,
+			Description: "Bill of materials (спецификация) for a product as of a date: which materials go into it and at what rate. " +
+				"Rates come from the «MaterialSpecification» register, read as a slice at `date`, so you can ask what the composition looked like at any past moment. " +
+				"A composition is identified by FOUR keys: product + matrix (матрица) + composition_type (тип состава) + production_group (группировка производства). " +
+				"If you omit those three modifiers, every variant of the product's composition is returned — each row carries them as columns, so check them before summing anything. " +
+				"Columns: product, material, article, unit, qty_per_unit (rate per one unit of product), qty_total (rate × qty), is_main_raw (основное сырьё), matrix, composition_type, production_group, spec_date, spec_document. " +
+				"Use specification_cost for the same data valued at material prices. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"product_id": map[string]any{
+						"type":        "string",
+						"description": "Product UUID (from resolve_product). Either product_id or product_ids is required.",
+					},
+					"product_ids": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Several product UUIDs at once. Leaf products only — group UUIDs will not match (a composition is defined per item).",
+					},
+					"date": map[string]any{
+						"type":        "string",
+						"format":      "date",
+						"description": "Read the composition as of this date (YYYY-MM-DD). Defaults to now.",
+					},
+					"qty": map[string]any{
+						"type":        "number",
+						"description": "Quantity of product to compute qty_total for (default: 1). May be fractional.",
+					},
+					"matrix_id": map[string]any{
+						"type":        "string",
+						"description": "Narrow to one matrix (матрица) variant of the composition.",
+					},
+					"composition_type_id": map[string]any{
+						"type":        "string",
+						"description": "Narrow to one composition type (тип состава).",
+					},
+					"production_group_id": map[string]any{
+						"type":        "string",
+						"description": "Narrow to one production group (группировка производства).",
+					},
+				},
+			},
+		},
+		{
+			Name: ToolSpecificationCost,
+			Description: "Planned material cost of a product per its bill of materials: the same rows as product_specification plus `price` (material price as of the date) and `amount` (qty_total × price), with an `amount` total. " +
+				"This is the PLANNED cost from the composition, not the actual cost of a production run — for actuals use production_document (FIFO cost of materials actually written off). " +
+				"Prices come from the «ЦеныТоваров» register; price_type defaults to «ЦенаЗакупки» (purchase price). " +
+				"Note that only materials are costed: the configuration keeps no labour or overhead in production, so this is a materials-only cost. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"product_id":  map[string]any{"type": "string", "description": "Product UUID (from resolve_product). Either product_id or product_ids is required."},
+					"product_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Several product UUIDs at once."},
+					"date":        map[string]any{"type": "string", "format": "date", "description": "Composition and prices as of this date (YYYY-MM-DD). Defaults to now."},
+					"qty":         map[string]any{"type": "number", "description": "Quantity of product to cost (default: 1)."},
+					"price_type_id": map[string]any{
+						"type":        "string",
+						"description": "Price type UUID to value materials with. Defaults to «ЦенаЗакупки» (purchase price) — the same type the production document itself uses.",
+					},
+					"matrix_id":           map[string]any{"type": "string", "description": "Narrow to one matrix variant."},
+					"composition_type_id": map[string]any{"type": "string", "description": "Narrow to one composition type."},
+					"production_group_id": map[string]any{"type": "string", "description": "Narrow to one production group."},
+				},
+			},
+		},
+		{
+			Name: ToolSpecificationExplode,
+			Description: "Multi-level explosion (разузлование) of a bill of materials: any material that has its own composition is expanded further, down to raw materials. " +
+				"Answers 'what raw materials does making N of this actually consume', which product_specification cannot — it only shows the first level, including semi-finished items. " +
+				"Rows are flat with `level` (1 = direct materials) and `path` (chain from the top product), plus `has_spec` telling whether a material is itself further expandable. " +
+				"The matrix / composition_type / production_group modifiers apply to the TOP level only — a semi-finished item may have its composition registered under a different matrix, and filtering deeper levels would silently truncate the tree. " +
+				"Guards: recursion stops at max_depth, a material already seen in the same branch is not expanded again (cycle), and the result is capped at 2000 rows — check the `truncated` flag. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"product_id": map[string]any{"type": "string", "description": "Product UUID to explode (from resolve_product). Required."},
+					"date":       map[string]any{"type": "string", "format": "date", "description": "Compositions as of this date (YYYY-MM-DD). Defaults to now."},
+					"qty":        map[string]any{"type": "number", "description": "Quantity of the top product (default: 1). qty_total on every level is scaled by it."},
+					"max_depth": map[string]any{
+						"type":        "integer",
+						"description": "How many levels to expand (default 3, max 10). Rows with has_spec=true at the deepest level mean the tree continues below max_depth.",
+					},
+					"with_cost": map[string]any{
+						"type":        "boolean",
+						"description": "Add price/amount columns valued at price_type_id (default «ЦенаЗакупки»).",
+					},
+					"price_type_id":       map[string]any{"type": "string", "description": "Price type UUID for with_cost. Defaults to «ЦенаЗакупки»."},
+					"matrix_id":           map[string]any{"type": "string", "description": "Narrow the TOP level to one matrix variant."},
+					"composition_type_id": map[string]any{"type": "string", "description": "Narrow the TOP level to one composition type."},
+					"production_group_id": map[string]any{"type": "string", "description": "Narrow the TOP level to one production group."},
+				},
+				"required": []string{"product_id"},
+			},
+		},
+		{
+			Name: ToolSpecificationWhereUsed,
+			Description: "Reverse explosion: which products contain a given material, and at what rate per unit. " +
+				"Use it for impact questions — 'this raw material got more expensive / is out of stock, which products are affected'. " +
+				"Only CURRENT compositions are returned: a material dropped from a composition by a newer «СпецификацияМатериалов» document does not show up, even though its old record still lives in the register slice. " +
+				"Columns: material, product, qty_per_unit, matrix, composition_type, production_group, spec_date, spec_document. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"material_id": map[string]any{
+						"type":        "string",
+						"description": "Material UUID (from resolve_product — raw materials live in the same product catalog). Either material_id or material_ids is required.",
+					},
+					"material_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Several material UUIDs at once."},
+					"date":                map[string]any{"type": "string", "format": "date", "description": "Compositions as of this date (YYYY-MM-DD). Defaults to now."},
+					"matrix_id":           map[string]any{"type": "string", "description": "Narrow to one matrix variant."},
+					"composition_type_id": map[string]any{"type": "string", "description": "Narrow to one composition type."},
+					"production_group_id": map[string]any{"type": "string", "description": "Narrow to one production group."},
+					"limit":               map[string]any{"type": "integer", "description": "Maximum rows to return (default 100, max 500)."},
+				},
+			},
+		},
+		{
+			Name: ToolSpecificationVersions,
+			Description: "Change history of a product's bill of materials: one version per «СпецификацияМатериалов» document that changed it, newest first, each with its full material list and a diff against the previous version. " +
+				"Answers 'when and how did the recipe change' — e.g. to explain a jump in material cost. " +
+				"The diff is computed against the previous version OF THE SAME variant (matrix + composition_type + production_group): variants live in parallel and comparing across them is meaningless. " +
+				"Unlike the other tools here, the result is not a columns/rows table but {product, total_versions, versions:[{date, document, matrix, composition_type, production_group, materials[], changes:{added,removed,changed}, is_first}]}. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"product_id": map[string]any{"type": "string", "description": "Product UUID (from resolve_product). Required."},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Optional window to limit history to. Omit for the whole history.",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"matrix_id":           map[string]any{"type": "string", "description": "Narrow to one matrix variant."},
+					"composition_type_id": map[string]any{"type": "string", "description": "Narrow to one composition type."},
+					"production_group_id": map[string]any{"type": "string", "description": "Narrow to one production group."},
+					"limit":               map[string]any{"type": "integer", "description": "Maximum versions to return, newest first (default 10, max 50)."},
+				},
+				"required": []string{"product_id"},
+			},
+		},
+		{
+			Name: ToolSpecificationList,
+			Description: "Inventory of bills of materials. Default mode lists products that HAVE a composition — one row per variant: product, matrix, composition_type, production_group, materials_count, spec_date, spec_document (plus total_variants and a truncated flag). " +
+				"With missing_only=true it flips around and lists products that were PRODUCED in `period` but have NO composition as of the date — the usual cause of the «Не задан состав для продукции» error when filling materials in a production document. " +
+				"In that mode columns are product, produced_qty, documents, last_production_date, and only assembly operations are counted. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"missing_only": map[string]any{
+						"type":        "boolean",
+						"description": "List products produced in `period` that have no composition, instead of listing existing compositions.",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Production period — used by missing_only mode (defaults to today, so pass it explicitly).",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"date":                map[string]any{"type": "string", "format": "date", "description": "Compositions as of this date (YYYY-MM-DD). Defaults to now."},
+					"product_ids":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Narrow to these products."},
+					"matrix_id":           map[string]any{"type": "string", "description": "Narrow to one matrix variant."},
+					"composition_type_id": map[string]any{"type": "string", "description": "Narrow to one composition type."},
+					"production_group_id": map[string]any{"type": "string", "description": "Narrow to one production group."},
+					"limit":               map[string]any{"type": "integer", "description": "Maximum rows (default 200, max 500; 100 in missing_only mode)."},
+				},
+			},
+		},
+		{
+			Name: ToolProductionOutput,
+			Description: "Production OUTPUT turnover from posted «Производство» documents for a period — what was manufactured. Reads the Продукция table of the document. " +
+				"By default only ASSEMBLY (сборка) operations are counted: disassembly is the mirror operation, where the Продукция table holds what was taken apart, and summing both into one 'produced' figure is wrong. Pass operation_type to change that; the effective value is echoed in applied_filters. " +
+				"Dimensions (group_by): product, product_group, warehouse (склад продукции), employee, matrix, composition_type, production_group, firm, operation, document, day, week, month (default: product, month). " +
+				"Measures: qty, amount (incl. VAT), amount_novat, documents, plus plan/fact — qty_plan, raw_qty_plan, qty_variance (fact − plan). Plan fields are not always filled in, so a zero plan means 'not planned', not 'zero output'. " +
+				"Amounts here are the sums entered in the document; for the actual FIFO cost of a run use production_document. Requires the mcp:report:cost permission. sort.field must be a selected dimension or measure.",
+			InputSchema: productionSchema(true),
+		},
+		{
+			Name: ToolProductionConsumption,
+			Description: "Material CONSUMPTION from posted «Производство» documents for a period — what was written off. Reads the Материалы table of the document. " +
+				"This table carries both the material and the product it was consumed for, so `material` and `product` can be combined in group_by to get cost of materials per manufactured item. " +
+				"By default only ASSEMBLY (сборка) operations are counted (in disassembly this table is what comes OUT, not what is consumed); pass operation_type to change that. " +
+				"Dimensions (group_by): material, material_group, product (the item it went into), product_group, warehouse (склад материалов), matrix, composition_type, production_group, firm, operation, document, day, week, month (default: material, month). " +
+				"Measures: qty, amount (incl. VAT), amount_novat, documents. " +
+				"Amounts are the sums entered in the document, NOT the FIFO cost the batch accounting actually wrote off — for that use production_document. Requires the mcp:report:cost permission.",
+			InputSchema: productionSchema(false),
+		},
+		{
+			Name: ToolProductionDocumentDetail,
+			Description: "Full detail of one «Производство» document: header, both tables and its actual register movements. " +
+				"Use it to explain a single production run, or to compare planned and actual cost. Get the document UUID from production_output/production_consumption with group_by=[\"document\"] (or from find_document). " +
+				"Returns {document, products[], materials[], movements[], summary}. movements are the real «ОстаткиТоваров» postings (direction expense/receipt, warehouse, product, batch, qty, amount). " +
+				"summary.cost_written_off is the ACTUAL FIFO cost of the materials consumed (computed by batch accounting), while summary.cost_received is what was capitalised for the output; summary.difference is the gap between them, and output_amount / materials_amount are the sums as typed into the document. " +
+				"Note: the configuration has no waste accounting (the Отходы table carries no fields) and no labour or overhead in production. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"document_id": map[string]any{
+						"type":        "string",
+						"description": "UUID of the «Производство» document.",
+					},
+				},
+				"required": []string{"document_id"},
+			},
+		},
+	}
+}
+
+// productionSchema строит схему production_output / production_consumption. Схемы отличаются
+// только набором измерений и мер: сотрудник и план живут в ТЧ Продукция, а связка
+// материал→изделие — в ТЧ Материалы. Общая часть (период, вид операции, фильтры, top, sort)
+// одинакова, поэтому собирается здесь, а не дублируется двумя литералами.
+func productionSchema(output bool) map[string]any {
+	dims := []string{"product", "product_group", "warehouse", "matrix", "composition_type",
+		"production_group", "firm", "operation", "document", "day", "week", "month"}
+	measures := []string{"qty", "amount", "amount_novat", "documents"}
+
+	if output {
+		dims = append(dims, "employee")
+		measures = append(measures, "qty_plan", "raw_qty_plan", "qty_variance")
+	} else {
+		dims = append(dims, "material", "material_group")
+	}
+
+	filters := map[string]any{
+		"product_ids": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+			"description": "Manufactured item UUIDs (from resolve_product); accepts group UUIDs — applied via IN HIERARCHY. " +
+				"In production_consumption this filters the product a material was consumed FOR, not the material itself.",
+		},
+		"warehouse_ids": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Warehouse UUIDs (from resolve_warehouse): склад продукции for output, склад материалов for consumption.",
+		},
+		"matrix_ids":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Matrix (матрица) UUIDs, taken from a prior call with group_by=[\"matrix\"] — there is no separate resolver."},
+		"composition_type_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Composition type UUIDs, taken from a prior call with group_by=[\"composition_type\"]."},
+		"production_group_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Production group UUIDs, taken from a prior call with group_by=[\"production_group\"]."},
+		"firm_ids":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Firm (UA/PL legal entity) UUIDs, taken from a prior call with group_by=[\"firm\"]."},
+	}
+
+	if output {
+		filters["employee_ids"] = map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Employee UUIDs, taken from a prior call with group_by=[\"employee\"] — there is no employee resolver.",
+		}
+	} else {
+		filters["material_ids"] = map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Material UUIDs (from resolve_product); accepts group UUIDs — applied via IN HIERARCHY.",
+		}
+	}
+
+	defaultDim := "product"
+	if !output {
+		defaultDim = "material"
+	}
+
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"period": map[string]any{
+				"type":        "object",
+				"description": "Report period",
+				"properties": map[string]any{
+					"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+					"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+				},
+				"required": []string{"from", "to"},
+			},
+			"operation_type": map[string]any{
+				"type":        "string",
+				"enum":        []string{"assembly", "disassembly", "all"},
+				"description": "Which production operations to count (default: assembly). 'all' mixes assembly and disassembly — group_by ['operation'] to keep them apart.",
+			},
+			"filters": map[string]any{
+				"type":        "object",
+				"description": "Optional filters",
+				"properties":  filters,
+			},
+			"group_by": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "enum": dims},
+				"description": "Group results by dimensions (default: " + defaultDim + ", month). day/week/month return ISO date strings; operation returns 'assembly'/'disassembly'.",
+			},
+			"measures": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "enum": measures},
+				"description": "Measures to include (default: qty, amount).",
+			},
+			"top": map[string]any{"type": "integer", "description": "Limit number of rows returned"},
+			"sort": map[string]any{
+				"type":        "array",
+				"description": "Sort order",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"field": map[string]any{"type": "string"},
+						"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+					},
+				},
+			},
+		},
+		"required": []string{"period"},
 	}
 }

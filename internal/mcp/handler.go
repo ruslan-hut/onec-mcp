@@ -236,6 +236,24 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callEventLog(r, params.Arguments)
 	case ToolFindDocument:
 		result, err = h.callFindDocument(r, params.Arguments)
+	case ToolProductSpecification:
+		result, err = h.callSpecification(r, onec.ReportSpecification, params.Arguments)
+	case ToolSpecificationCost:
+		result, err = h.callSpecification(r, onec.ReportSpecificationCost, params.Arguments)
+	case ToolSpecificationExplode:
+		result, err = h.callSpecification(r, onec.ReportSpecificationExplode, params.Arguments)
+	case ToolSpecificationWhereUsed:
+		result, err = h.callSpecification(r, onec.ReportSpecificationWhereUsed, params.Arguments)
+	case ToolSpecificationVersions:
+		result, err = h.callSpecification(r, onec.ReportSpecificationVersions, params.Arguments)
+	case ToolSpecificationList:
+		result, err = h.callSpecification(r, onec.ReportSpecificationList, params.Arguments)
+	case ToolProductionOutput:
+		result, err = h.callProductionReport(r, onec.ReportProductionOutput, params.Arguments)
+	case ToolProductionConsumption:
+		result, err = h.callProductionReport(r, onec.ReportProductionConsumption, params.Arguments)
+	case ToolProductionDocumentDetail:
+		result, err = h.callProductionDocument(r, params.Arguments)
 	default:
 		h.auditToolCall(auth, params.Name, false, "unknown_tool", started)
 		return InvalidParams(req.ID, "unknown tool: "+params.Name)
@@ -885,6 +903,159 @@ func (h *Handler) callFindDocument(r *http.Request, args any) (*CallToolResult, 
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
+}
+
+// specificationArgs — аргументы шести инструментов по спецификациям. Структура одна на всех:
+// набор параметров у них общий (продукция/материал, дата среза, три разреза состава), каждый
+// читает своё подмножество, а лишние ключи 1С игнорирует. Разводить шесть почти одинаковых
+// структур ради этого смысла нет.
+type specificationArgs struct {
+	Date              string      `json:"date"`
+	ProductID         string      `json:"product_id"`
+	ProductIDs        []string    `json:"product_ids"`
+	MaterialID        string      `json:"material_id"`
+	MaterialIDs       []string    `json:"material_ids"`
+	MatrixID          string      `json:"matrix_id"`
+	CompositionTypeID string      `json:"composition_type_id"`
+	ProductionGroupID string      `json:"production_group_id"`
+	PriceTypeID       string      `json:"price_type_id"`
+	Qty               flexFloat   `json:"qty"`
+	MaxDepth          flexInt     `json:"max_depth"`
+	WithCost          flexBool    `json:"with_cost"`
+	MissingOnly       flexBool    `json:"missing_only"`
+	Period            onec.Period `json:"period"`
+	Limit             flexInt     `json:"limit"`
+}
+
+// callSpecification обслуживает product_specification, specification_cost,
+// specification_explode, specification_where_used, specification_versions и
+// specification_list — все шесть ходят в /mcp/reports/{reportType} с одним телом.
+// Ответ 1С пробрасывается as-is (RawMessage): у инструментов разный конверт
+// (таблица columns/rows против дерева версий), и типизировать его в гейте нечего.
+func (h *Handler) callSpecification(r *http.Request, reportType string, args any) (*CallToolResult, error) {
+	var a specificationArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.SpecificationRequest{
+		Date:              a.Date,
+		ProductID:         a.ProductID,
+		ProductIDs:        a.ProductIDs,
+		MaterialID:        a.MaterialID,
+		MaterialIDs:       a.MaterialIDs,
+		MatrixID:          a.MatrixID,
+		CompositionTypeID: a.CompositionTypeID,
+		ProductionGroupID: a.ProductionGroupID,
+		PriceTypeID:       a.PriceTypeID,
+		Qty:               float64(a.Qty),
+		MaxDepth:          clampDepth(a.MaxDepth),
+		WithCost:          bool(a.WithCost),
+		MissingOnly:       bool(a.MissingOnly),
+		Limit:             h.clampRows(a.Limit),
+	}
+
+	// период нужен только истории версий и режиму missing_only; пустой объект наверх не шлём,
+	// иначе 1С поймёт его как «сегодня» и молча сузит выборку до текущего дня
+	if a.Period.From != "" || a.Period.To != "" {
+		period := a.Period
+		req.Period = &period
+	}
+
+	resp, err := h.onecClient.ProductionReport(r.Context(), reportType, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type productionReportArgs struct {
+	Period        onec.Period            `json:"period"`
+	OperationType string                 `json:"operation_type"`
+	Filters       onec.ProductionFilters `json:"filters"`
+	GroupBy       []string               `json:"group_by"`
+	Measures      []string               `json:"measures"`
+	Top           flexInt                `json:"top"`
+	Sort          []onec.SortSpec        `json:"sort"`
+}
+
+// callProductionReport обслуживает production_output и production_consumption: секция задана
+// эндпойнтом 1С, тело у них общее.
+func (h *Handler) callProductionReport(r *http.Request, reportType string, args any) (*CallToolResult, error) {
+	var a productionReportArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.ProductionReportRequest{
+		Period:        a.Period,
+		OperationType: a.OperationType,
+		Filters:       a.Filters,
+		GroupBy:       a.GroupBy,
+		Measures:      a.Measures,
+		Top:           h.clampTop(a.Top),
+		Sort:          a.Sort,
+	}
+
+	resp, err := h.onecClient.ProductionReport(r.Context(), reportType, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type productionDocumentArgs struct {
+	DocumentID string `json:"document_id"`
+}
+
+func (h *Handler) callProductionDocument(r *http.Request, args any) (*CallToolResult, error) {
+	var a productionDocumentArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.ProductionDocumentRequest{DocumentID: a.DocumentID}
+
+	resp, err := h.onecClient.ProductionReport(r.Context(), onec.ReportProductionDocument, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+// clampRows — необязательный limit инструментов по спецификациям: 0 означает «по умолчанию 1С»
+// и наверх не уходит вовсе, всё остальное режется общим потолком max_rows.
+func (h *Handler) clampRows(limit flexInt) int {
+	if limit <= 0 {
+		return 0
+	}
+	if int(limit) > h.cfg.Limits.MaxRows {
+		return h.cfg.Limits.MaxRows
+	}
+	return int(limit)
+}
+
+// clampDepth — глубина разузлования. Верхняя граница дублирует 1С (там тот же потолок 10):
+// дерево растёт экспоненциально, и просьба «раскрой на 100 уровней» должна упираться в лимит
+// на входе, а не в таймаут запроса.
+func clampDepth(depth flexInt) int {
+	const maxDepth = 10
+	if depth <= 0 {
+		return 0
+	}
+	if int(depth) > maxDepth {
+		return maxDepth
+	}
+	return int(depth)
 }
 
 // costMeasuresIn возвращает запрошенные меры, закрытые правом mcp:report:cost.

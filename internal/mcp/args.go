@@ -48,6 +48,37 @@ func (f *flexInt) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// flexFloat — дробное число, допускающее строковую форму. Нужно там, где величина по смыслу
+// не целая: qty в спецификациях (0.5 единицы сырья на изделие — норма, а не опечатка).
+type flexFloat float64
+
+func (f *flexFloat) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "null" {
+		*f = 0
+		return nil
+	}
+
+	if strings.HasPrefix(raw, `"`) {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		raw = strings.TrimSpace(s)
+		if raw == "" {
+			*f = 0
+			return nil
+		}
+	}
+
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fmt.Errorf("expected a number, got %s", string(data))
+	}
+	*f = flexFloat(v)
+	return nil
+}
+
 // flexBool — булево, допускающее строковую форму ("true", "1") и число (0/1).
 type flexBool bool
 

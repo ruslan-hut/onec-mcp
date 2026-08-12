@@ -23,7 +23,26 @@ Base URL is configured via `onec.base_url` in config.
 > Note: this list shows the core endpoints. The gate also calls the resolve endpoints for
 > `sales_channel` / `cash` / `cost_article` / `operation`, the report endpoints
 > `top_products` / `customer_summary` / `cash_balance` / `cash_flow`, plus `POST /mcp/auth/verify`
-> and `GET /mcp/health`. The admin endpoints below were the latest addition.
+> and `GET /mcp/health`.
+
+The production block (latest addition) adds nine more report endpoints, all gated by
+`mcp:report:cost` and all passthrough — the gate forwards the body and returns the 1C response
+as-is, so fields can be added on the 1C side without touching Go:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /mcp/reports/specification` | Bill of materials as of a date |
+| `POST /mcp/reports/specification_cost` | Same, valued at material prices |
+| `POST /mcp/reports/specification_explode` | Multi-level explosion down to raw materials |
+| `POST /mcp/reports/specification_where_used` | Reverse explosion (material → products) |
+| `POST /mcp/reports/specification_versions` | Change history of a composition, with diffs |
+| `POST /mcp/reports/specification_list` | Compositions inventory / products produced without one |
+| `POST /mcp/reports/production_output` | Manufacturing output turnover (ТЧ Продукция) |
+| `POST /mcp/reports/production_consumption` | Material consumption turnover (ТЧ Материалы) |
+| `POST /mcp/reports/production_document` | One production document with its actual movements |
+
+See `api.md` for the argument reference; the 1C side lives in `CommonModules/MCP` (region
+`Production`).
 
 ## Authentication
 

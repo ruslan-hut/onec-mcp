@@ -408,6 +408,19 @@ func (c *Client) CustomerSummary(ctx context.Context, req *CustomerSummaryReques
 	return resp, nil
 }
 
+// ProductionReport — единая точка для производственного блока (спецификации и документы
+// Производство). Отчётов девять, тело у них разное, а обработка одинаковая: passthrough
+// json.RawMessage, как у top_products/customer_summary — новые поля на стороне 1С не требуют
+// правок гейта. reportType берётся только из констант Report* этого пакета: наружу путь
+// не параметризуется, подставить произвольный сегмент клиент не может.
+func (c *Client) ProductionReport(ctx context.Context, reportType string, body any) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/"+reportType, body, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // EventLog проксирует тело админ-инструмента чтения журнала регистрации (event_log /
 // object_history) в 1С. Тело передаётся как есть — 1С сама разбирает поля
 // user/session/level/events/object_type/object_id/period/limit. Ответ возвращается
