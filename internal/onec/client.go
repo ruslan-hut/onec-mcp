@@ -445,6 +445,17 @@ func (c *Client) Purchases(ctx context.Context, req *PurchasesRequest) (*Purchas
 	return &resp, nil
 }
 
+// GoodsInTransit — остатки товаров в пути (регистр ОстаткиТоваровВПути). Тело ответа
+// пробрасывается как есть: состав колонок задаёт 1С, гейту декомпозиция не нужна.
+func (c *Client) GoodsInTransit(ctx context.Context, req *GoodsInTransitRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/goods_in_transit", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
 // TopProducts / CustomerSummary возвращаются как json.RawMessage —
 // гейту достаточно прокинуть тело наверх, без декомпозиции в типизированную структуру.
 // Это позволяет добавлять поля в 1С-стороне без правки гейта.

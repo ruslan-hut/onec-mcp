@@ -20,6 +20,7 @@ const (
 	ToolReceivablesBalance  = "receivables_balance"
 	ToolPayablesBalance     = "payables_balance"
 	ToolPurchasesReport     = "purchases_report"
+	ToolGoodsInTransit      = "goods_in_transit"
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
@@ -60,6 +61,8 @@ var ToolScopes = map[string]string{
 	ToolSalesReport:         "mcp:report:sales",
 	ToolStockBalance:        "mcp:report:stock",
 	ToolAvailabilityReport:  "mcp:report:stock",
+	// Товары в пути — те же остатки, только в отдельном регистре: право как у stock_balance.
+	ToolGoodsInTransit: "mcp:report:stock",
 	ToolTopProducts:         "mcp:report:sales",
 	ToolCustomerSummary:     "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
@@ -778,7 +781,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolPurchasesReport,
-			Description: "Get goods-purchase turnover (обороты поступления ТМЦ) from «ПриходнаяНакладная» documents for a period, broken down by supplier and month. Amounts are NET of returns (ВидОперации=Возврат is subtracted) and include VAT — the correct purchases base for a DPO denominator. Only posted documents are counted. Dimensions (group_by): supplier, firm, day, week, month (default: supplier, month; day/week/month return ISO date strings). Measures: amount (purchase sum incl. VAT), qty (default: amount). Filters: supplier_ids (UUIDs from resolve_customer — suppliers share the counterparty catalog; applied via IN HIERARCHY), firm_ids (UA/PL legal entity — group by firm to see the split / exclude intra-group purchases). Requires the mcp:report:money permission. Amounts are in the document currency. sort.field must be a selected dimension or measure.",
+			Description: "Get goods-purchase turnover (обороты поступления ТМЦ) from «ПриходнаяНакладная» documents for a period — by supplier, product, warehouse or time bucket. Amounts are NET of returns (ВидОперации=Возврат is subtracted) and include VAT — the correct purchases base for a DPO denominator. Only posted documents are counted. CURRENCY: line amounts are stored in the document currency, so `amount` is converted to the base currency at the document's rate; `amount_currency` keeps the raw document-currency figure and is only meaningful together with group_by=[\"currency\"]. IN TRANSIT: an invoice marked «в пути» posts neither stock nor a payable (the goods have not arrived), so by default such documents are EXCLUDED — pass in_transit=true for exactly those, or in_transit=\"any\" for everything; use goods_in_transit for the stock still on its way. Dimensions (group_by): supplier, firm, warehouse, product, product_group, currency, in_transit, day, week, month, delivery_date (default: supplier, month; day/week/month/delivery_date return ISO date strings). Measures: amount (base currency, incl. VAT), amount_currency, amount_without_vat, qty, documents (count of invoices) — default: amount. Filters: supplier_ids (UUIDs from resolve_customer — suppliers share the counterparty catalog; applied via IN HIERARCHY), firm_ids (UA/PL legal entity), product_ids (IN HIERARCHY, accepts group UUIDs), warehouse_ids. Requires the mcp:report:money permission; without mcp:report:cost the report covers goods for sale only — purchases of raw materials are excluded. sort.field must be a selected dimension or measure.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -805,17 +808,34 @@ func GetTools() []Tool {
 								"items":       map[string]any{"type": "string"},
 								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a call with group_by=[\"firm\"] (there is no separate firm resolver).",
 							},
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product; with the mcp:report:cost permission also from resolve_material). Leaf or group UUIDs — applied as IN HIERARCHY.",
+							},
+							"warehouse_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by receiving warehouse IDs (from resolve_warehouse).",
+							},
+						},
+					},
+					"in_transit": map[string]any{
+						"description": "Which invoices to count: false (default) — only goods that actually arrived; true — only the ones still «в пути»; \"any\" — both. An in-transit invoice posts no stock movement and no payable, which is why it is excluded by default.",
+						"anyOf": []map[string]any{
+							{"type": "boolean"},
+							{"type": "string", "enum": []string{"any"}},
 						},
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"supplier", "firm", "day", "week", "month"}},
-						"description": "Group results by dimensions (default: supplier, month). day/week/month bucket by document date.",
+						"items":       map[string]any{"type": "string", "enum": []string{"supplier", "firm", "warehouse", "product", "product_group", "currency", "in_transit", "day", "week", "month", "delivery_date"}},
+						"description": "Group results by dimensions (default: supplier, month). day/week/month bucket by document date; delivery_date buckets by the expected delivery date (ДатаПоставки) — the useful one together with in_transit. Do not combine product with product_group; the redundant one is dropped.",
 					},
 					"measures": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"amount", "qty"}},
-						"description": "Measures to include (default: amount). amount = purchase sum incl. VAT, net of returns; qty = quantity, net of returns.",
+						"items":       map[string]any{"type": "string", "enum": []string{"amount", "amount_currency", "amount_without_vat", "qty", "documents"}},
+						"description": "Measures to include (default: amount). amount = purchase sum incl. VAT in the BASE currency (converted at the document's rate), net of returns; amount_currency = the same sum left in the document currency — add group_by=[\"currency\"] or the figure mixes currencies; amount_without_vat = base currency, VAT excluded; qty = quantity, net of returns; documents = number of distinct invoices (not signed by returns).",
 					},
 					"top": map[string]any{
 						"type":        "integer",
@@ -834,6 +854,76 @@ func GetTools() []Tool {
 					},
 				},
 				"required": []string{"period"},
+			},
+		},
+		{
+			Name:        ToolGoodsInTransit,
+			Description: "Stock that is IN TRANSIT as of a date — paid for or ordered, already booked to the firm, but not yet accepted at the warehouse. It lives in a separate 1C register («ОстаткиТоваровВПути»), which is why none of it shows up in stock_balance: a purchase invoice flagged «в пути» posts here instead, and the same document moves the goods into the normal stock register once it is re-posted as arrived. Use it to answer 'what is on its way and when does it land', 'do we need to reorder or is it already coming', and to reconcile a stockout against incoming supply. Dimensions (group_by): warehouse (the destination), product, product_group, firm, status (how far along the delivery is), supplier, document (the source invoice) and delivery_date — the EXPECTED ARRIVAL date (ДатаПоставки from the invoice header; empty means no date was set, not 'no delivery'). Default: warehouse + product. Measures: qty, amount (base currency), amount_in_currency (cost-accounting currency) — default qty + amount; both come pre-converted from the register, no rate juggling. Rows whose balance nets to zero are omitted — those deliveries already arrived. Requires the mcp:report:stock permission; without mcp:report:cost, materials and production warehouses are excluded as everywhere else.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"date": map[string]any{
+						"type":        "string",
+						"format":      "date",
+						"description": "Balance date (YYYY-MM-DD). Defaults to the current moment.",
+					},
+					"filters": map[string]any{
+						"type":        "object",
+						"description": "Optional filters",
+						"properties": map[string]any{
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product; with the mcp:report:cost permission also from resolve_material). Leaf or group UUIDs — applied as IN HIERARCHY.",
+							},
+							"warehouse_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by destination warehouse IDs (from resolve_warehouse).",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a call with group_by=[\"firm\"] — there is no firm resolver.",
+							},
+							"status_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by document status IDs. Take them from a call with group_by=[\"status\"] — there is no status resolver.",
+							},
+							"supplier_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by supplier IDs (from resolve_customer — suppliers share the counterparty catalog). Applied via IN HIERARCHY to the source invoice's counterparty.",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product", "product_group", "firm", "status", "supplier", "document", "delivery_date"}},
+						"description": "Group results by dimensions (default: warehouse, product). delivery_date is the expected arrival date (ДатаПоставки of the source invoice), bucketed by day — group by it to get a delivery calendar. Do not combine product with product_group; the redundant one is dropped.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"qty", "amount", "amount_in_currency"}},
+						"description": "Measures to include (default: qty, amount). amount is in the base currency, amount_in_currency in the cost-accounting currency — both are stored already converted.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order (sort.field must be a selected dimension or measure)",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
 			},
 		},
 		{

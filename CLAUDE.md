@@ -103,7 +103,7 @@ Tools live in `internal/mcp/tools.go` (definitions + `ToolScopes`); the dispatch
 in `handleToolsCall`. They come in families, each closed by one scope:
 - resolvers (`resolve_customer`, `resolve_warehouse`, `resolve_product`, …) — `mcp:resolve`
 - sales (`sales_report`, `top_products`, `customer_summary`) — `mcp:report:sales`
-- stock (`stock_balance`, `availability_report`) — `mcp:report:stock`
+- stock (`stock_balance`, `availability_report`, `goods_in_transit`) — `mcp:report:stock`
 - money (`cash_*`, `receivables_balance`, `payables_balance`, `purchases_report`) — `mcp:report:money`
 - production (`resolve_material`, `product_specification`, `specification_*`, `production_*`) — `mcp:report:cost`
 - admin (`event_log`, `object_history`, `find_document`) — `mcp:admin:eventlog`

@@ -599,17 +599,63 @@ Accounts payable to suppliers (КЗ — what we owe suppliers) as of a date, bro
 
 Goods-purchase turnover from posted «ПриходнаяНакладная» documents for a **period**. Amounts are net
 of returns (`ВидОперации=Возврат` subtracted) and **include VAT** — the correct purchases base for a
-DPO denominator. Amounts are in the document currency.
+DPO denominator.
+
+**Currency.** Line amounts are stored in the document's currency, so `amount` is converted to the
+base currency at the document's rate (`СуммаСНДС × Курс`; a zero rate on legacy documents is read as
+1). `amount_currency` keeps the raw figure and is only meaningful together with
+`group_by: ["currency"]`.
+
+**In transit.** An invoice flagged «в пути» posts neither stock nor a payable — it only fills
+«ОстаткиТоваровВПути». Such documents are therefore **excluded by default**; `in_transit: true`
+returns exactly them (pair it with `delivery_date` for an arrival calendar), `"any"` returns both.
+The flag is read from `ВПути` **or** `Статус.Предварительный`, whichever the document uses.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
 | `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer`); accepts group UUIDs — applied via IN HIERARCHY. |
 | `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
-| `group_by` | array | No | `supplier`, `firm`, `day`, `week`, `month` (default: `supplier`, `month`; day/week/month return ISO date strings). |
-| `measures` | array | No | `amount` (sum incl. VAT, net of returns), `qty` (default: `amount`). |
+| `filters.product_ids` | array | No | Product UUIDs; leaf or group — applied via IN HIERARCHY. |
+| `filters.warehouse_ids` | array | No | Receiving warehouse UUIDs. |
+| `in_transit` | boolean / string | No | `false` (default) — arrived goods only; `true` — in-transit only; `"any"` — both. |
+| `group_by` | array | No | `supplier`, `firm`, `warehouse`, `product`, `product_group`, `currency`, `in_transit`, `day`, `week`, `month`, `delivery_date` (default: `supplier`, `month`; date dims return ISO date strings). |
+| `measures` | array | No | `amount` (base currency, incl. VAT), `amount_currency`, `amount_without_vat`, `qty`, `documents` (default: `amount`). |
 | `top` | integer | No | Limit rows. |
 | `sort` | array | No | `[{field, dir}]`. |
+
+Without `mcp:report:cost` the report covers goods for sale only — purchases of raw materials
+(номенклатура с пометкой `ДляПроизводства`) are excluded from both rows and totals, exactly as in
+`stock_balance`.
+
+---
+
+### `goods_in_transit`
+
+Stock **in transit** as of a date: goods booked to the firm but not yet accepted at the warehouse.
+They live in a separate register («ОстаткиТоваровВПути») and are invisible to `stock_balance` —
+a purchase invoice flagged «в пути» posts here, and the same document moves the goods into the
+normal stock register when it is re-posted as arrived. Requires **`mcp:report:stock`**.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `date` | string | No | Balance date (YYYY-MM-DD). Defaults to now. |
+| `filters.product_ids` | array | No | Product UUIDs; leaf or group — IN HIERARCHY. |
+| `filters.warehouse_ids` | array | No | Destination warehouse UUIDs. |
+| `filters.firm_ids` | array | No | Firm UUIDs (take them from `group_by: ["firm"]`). |
+| `filters.status_ids` | array | No | Document status UUIDs (take them from `group_by: ["status"]`). |
+| `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer`) — matched against the source invoice, IN HIERARCHY. |
+| `group_by` | array | No | `warehouse`, `product`, `product_group`, `firm`, `status`, `supplier`, `document`, `delivery_date` (default: `warehouse`, `product`). |
+| `measures` | array | No | `qty`, `amount` (base currency), `amount_in_currency` (cost-accounting currency) — default `qty`, `amount`. |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]`. |
+
+`delivery_date` is the **expected arrival** (`ДатаПоставки` of the source invoice) bucketed by day;
+an empty value means no date was entered, not "no delivery". Supplier, document and delivery date
+come from the register's recorder, so unlike the other stock reports this one reads register
+records rather than the totals table — acceptable because the table only holds deliveries that are
+still on their way. Rows whose balance nets to zero are dropped: that stock has already arrived.
+Both amount measures are stored pre-converted by 1C, no rate handling is needed.
 
 ---
 

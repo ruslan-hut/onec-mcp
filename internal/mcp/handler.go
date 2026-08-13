@@ -220,6 +220,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callPayablesBalance(r, params.Arguments)
 	case ToolPurchasesReport:
 		result, err = h.callPurchasesReport(r, params.Arguments)
+	case ToolGoodsInTransit:
+		result, err = h.callGoodsInTransit(r, params.Arguments)
 	case ToolSalesReport:
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
@@ -695,6 +697,42 @@ func (h *Handler) callPurchasesReport(r *http.Request, args any) (*CallToolResul
 
 	return &CallToolResult{
 		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+type goodsInTransitArgs struct {
+	Date     string                     `json:"date"`
+	Filters  onec.GoodsInTransitFilters `json:"filters"`
+	GroupBy  []string                   `json:"group_by"`
+	Measures []string                   `json:"measures"`
+	Top      flexInt                    `json:"top"`
+	Sort     []onec.SortSpec            `json:"sort"`
+}
+
+// callGoodsInTransit — остатки товаров в пути. Ответ 1С пробрасывается сырым (как у
+// availability_report): состав колонок задаёт 1С.
+func (h *Handler) callGoodsInTransit(r *http.Request, args any) (*CallToolResult, error) {
+	var a goodsInTransitArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.GoodsInTransitRequest{
+		Date:     a.Date,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      h.clampTop(a.Top),
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.GoodsInTransit(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
 	}, nil
 }
 

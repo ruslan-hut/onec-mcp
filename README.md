@@ -180,7 +180,8 @@ serves no routes at all.
 | `cash_flow` | `mcp:report:money` | Cash flow turnovers for a period |
 | `receivables_balance` | `mcp:report:money` | Customer receivables (ДЗ) and advances received, expanded by sign |
 | `payables_balance` | `mcp:report:money` | Supplier payables (КЗ) and advances issued, expanded by sign |
-| `purchases_report` | `mcp:report:money` | Goods-purchase turnover by supplier/month (net of returns) |
+| `purchases_report` | `mcp:report:money` | Goods-purchase turnover by supplier / product / warehouse / month (net of returns, base currency) |
+| `goods_in_transit` | `mcp:report:stock` | Stock on its way: what, where to, from whom and when it is expected |
 
 ### Scopes
 

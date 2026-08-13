@@ -490,8 +490,10 @@ type SettlementsResponse struct {
 // SupplierIDs — UUID поставщиков (резолвятся через resolve_customer, IN HIERARCHY);
 // FirmIDs — UUID фирм (UA/PL), измерение Фирма, IN.
 type PurchasesFilters struct {
-	SupplierIDs []string `json:"supplier_ids,omitempty"`
-	FirmIDs     []string `json:"firm_ids,omitempty"`
+	SupplierIDs  []string `json:"supplier_ids,omitempty"`
+	FirmIDs      []string `json:"firm_ids,omitempty"`
+	ProductIDs   []string `json:"product_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
 }
 
 func (f *PurchasesFilters) UnmarshalJSON(data []byte) error {
@@ -507,12 +509,16 @@ func (f *PurchasesFilters) UnmarshalJSON(data []byte) error {
 // PurchasesRequest — тело POST /mcp/reports/purchases.
 // Обороты поступления ТМЦ за период по документу «ПриходнаяНакладная» (нетто возвратов).
 type PurchasesRequest struct {
-	Period   Period           `json:"period"`
-	Filters  PurchasesFilters `json:"filters,omitempty"`
-	GroupBy  []string         `json:"group_by,omitempty"`
-	Measures []string         `json:"measures,omitempty"`
-	Top      int              `json:"top,omitempty"`
-	Sort     []SortSpec       `json:"sort,omitempty"`
+	Period  Period           `json:"period"`
+	Filters PurchasesFilters `json:"filters,omitempty"`
+	// InTransit — режим отбора накладных «в пути»: false (по умолчанию, только поступивший
+	// товар), true (только в пути) или "any". Тип свободный, потому что 1С принимает и булево,
+	// и строку; гейт значение не интерпретирует, только пробрасывает.
+	InTransit interface{} `json:"in_transit,omitempty"`
+	GroupBy   []string    `json:"group_by,omitempty"`
+	Measures  []string    `json:"measures,omitempty"`
+	Top       int         `json:"top,omitempty"`
+	Sort      []SortSpec  `json:"sort,omitempty"`
 }
 
 type PurchasesResponse struct {
@@ -520,6 +526,36 @@ type PurchasesResponse struct {
 	Rows    [][]interface{}        `json:"rows"`
 	Totals  map[string]interface{} `json:"totals,omitempty"`
 	ReportEcho
+}
+
+// GoodsInTransitFilters — отборы отчёта по товарам в пути. Поставщик берётся из
+// документа-регистратора (сам регистр контрагента не хранит), поэтому отбор по нему
+// возможен только вместе с чтением записей регистра — как это и сделано на стороне 1С.
+type GoodsInTransitFilters struct {
+	ProductIDs   []string `json:"product_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	FirmIDs      []string `json:"firm_ids,omitempty"`
+	StatusIDs    []string `json:"status_ids,omitempty"`
+	SupplierIDs  []string `json:"supplier_ids,omitempty"`
+}
+
+func (f *GoodsInTransitFilters) UnmarshalJSON(data []byte) error {
+	type alias GoodsInTransitFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = GoodsInTransitFilters(a)
+	return nil
+}
+
+type GoodsInTransitRequest struct {
+	Date     string                `json:"date,omitempty"`
+	Filters  GoodsInTransitFilters `json:"filters,omitempty"`
+	GroupBy  []string              `json:"group_by,omitempty"`
+	Measures []string              `json:"measures,omitempty"`
+	Top      int                   `json:"top,omitempty"`
+	Sort     []SortSpec            `json:"sort,omitempty"`
 }
 
 // Производственный блок: типы отчётов 1С (последний сегмент пути /mcp/reports/{type}).
