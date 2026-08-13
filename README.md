@@ -165,8 +165,9 @@ serves no routes at all.
 | Tool | Scope | Description |
 |------|-------|-------------|
 | `resolve_customer` | `mcp:resolve` | Search customers by name, phone, etc. (optional catalog groups) |
-| `resolve_warehouse` | `mcp:resolve` | Search warehouses by name or code |
+| `resolve_warehouse` | `mcp:resolve` | Search warehouses by name or code (production warehouses only with `mcp:report:cost`) |
 | `resolve_product` | `mcp:resolve` | Search products by name or артикул (optional catalog groups) |
+| `resolve_material` | `mcp:report:cost` | Search raw materials and components — the production-only half of the same item catalog |
 | `resolve_sales_channel` | `mcp:resolve` | Search hierarchical sales channels |
 | `resolve_cash` | `mcp:report:money` | Search cash desks (кассы) |
 | `resolve_cost_article` | `mcp:report:money` | Search cost articles (статьи затрат) |
@@ -185,7 +186,11 @@ serves no routes at all.
 
 Each tool requires a scope; `tools/list` is filtered to the caller's granted
 scopes and `tools/call` is rejected without the matching scope. The
-`mcp:report:cost` scope is measure-level — it unlocks the `cost`, `profit`, and
-`margin` measures in `sales_report` and `customer_summary`. Scopes are enforced
+`mcp:report:cost` scope works on three levels at once: it unlocks the `cost`,
+`profit`, and `margin` measures in `sales_report` and `customer_summary`; it
+gates the production tools (`resolve_material`, `product_specification`,
+`specification_*`, `production_*`); and it widens what the shared tools return —
+`resolve_warehouse` starts listing production warehouses, `stock_balance` and
+`availability_report` start covering materials on them. Scopes are enforced
 again on the 1C side via the `X-MCP-Scopes` header (defense in depth). See the
 [OAuth Setup & Admin Guide](docs/oauth-setup.md) for issuing per-user keys.

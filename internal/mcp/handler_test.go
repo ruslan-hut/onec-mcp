@@ -385,3 +385,43 @@ func TestCostMeasuresIn(t *testing.T) {
 		})
 	}
 }
+
+func TestClampLimits(t *testing.T) {
+	h, _ := newTestHandler(t) // MaxRows=5000, ResolveLimit=10
+
+	t.Run("resolve limit", func(t *testing.T) {
+		cases := []struct{ in, want int }{
+			{0, 10}, {-5, 10}, {3, 3}, {10, 10}, {999, 10},
+		}
+		for _, tc := range cases {
+			if got := h.clampLimit(flexInt(tc.in)); got != tc.want {
+				t.Errorf("clampLimit(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("report rows", func(t *testing.T) {
+		cases := []struct{ in, want int }{
+			{0, 5000}, {-1, 5000}, {100, 100}, {5000, 5000}, {99999, 5000},
+		}
+		for _, tc := range cases {
+			if got := h.clampTop(flexInt(tc.in)); got != tc.want {
+				t.Errorf("clampTop(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		}
+	})
+
+	// max_rows — потолок и для значения по умолчанию: иначе вызывающий с завышенным дефолтом
+	// протаскивал бы мимо лимита ровно то, ради чего лимит и заведён.
+	t.Run("default is clamped too", func(t *testing.T) {
+		if got := h.clampTopDefault(0, 10); got != 10 {
+			t.Errorf("clampTopDefault(0, 10) = %d, want 10", got)
+		}
+		if got := h.clampTopDefault(0, 99999); got != 5000 {
+			t.Errorf("clampTopDefault(0, 99999) = %d, want 5000 — дефолт выше max_rows не урезан", got)
+		}
+		if got := h.clampTopDefault(50, 99999); got != 50 {
+			t.Errorf("clampTopDefault(50, 99999) = %d, want 50", got)
+		}
+	})
+}

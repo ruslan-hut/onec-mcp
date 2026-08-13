@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -85,7 +86,8 @@ func (s *Server) tokenAuthorizationCode(w http.ResponseWriter, r *http.Request) 
 	// уже проверен на совпадение выше.
 	effectiveResource := s.resource()
 
-	access, refresh, err := s.issueTokens(r.Context(), clientID, authCode.Sub, authCode.Scope, effectiveResource, "")
+	// Обмен кода — начало новой цепочки, family заводится внутри issueTokens.
+	access, refresh, err := s.issueTokens(r.Context(), clientID, authCode.Sub, authCode.Scope, effectiveResource, "", "")
 	if err != nil {
 		s.logger.Error("oauth.token.issue_failed", "grant_type", "authorization_code", "error", err)
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to issue tokens")
@@ -128,9 +130,25 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Consume — атомарно помечает revoked и возвращает данные.
-	// Повторный вызов с тем же токеном получит ErrNotFound — это защита от replay.
 	oldRefresh, err := s.storage.ConsumeRefreshToken(r.Context(), s.cfg.Tenant, refreshTokenStr)
 	if err != nil {
+		// Повторное предъявление уже потраченного токена: легитимный клиент свой обменял, значит
+		// в обороте копия. Кто именно пришёл вторым — неизвестно, поэтому гасим всю цепочку и
+		// заставляем обоих авторизоваться заново (RFC 9700 §4.14.2).
+		if errors.Is(err, ErrTokenReplay) {
+			revoked, rerr := s.storage.RevokeFamily(r.Context(), s.cfg.Tenant, oldRefresh.Family)
+			if rerr != nil {
+				s.logger.Error("oauth.token.family_revoke_failed", "error", rerr, "sub", oldRefresh.Sub)
+			}
+			s.logger.Warn("oauth.token.replay_detected",
+				"sub", oldRefresh.Sub,
+				"client_id", oldRefresh.ClientID,
+				"remote", clientIP(r),
+				"revoked", revoked,
+			)
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "refresh_token is invalid or revoked")
+			return
+		}
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "refresh_token is invalid or revoked")
 		return
 	}
@@ -150,7 +168,10 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	access, refresh, err := s.issueTokens(r.Context(), clientID, oldRefresh.Sub, newScope, s.resource(), oldRefresh.Token)
+	// Ротация продолжает ту же цепочку — family наследуется, иначе отзыв при replay
+	// доставал бы только до места разрыва.
+	access, refresh, err := s.issueTokens(r.Context(), clientID, oldRefresh.Sub, newScope, s.resource(),
+		oldRefresh.Token, oldRefresh.Family)
 	if err != nil {
 		s.logger.Error("oauth.token.issue_failed", "grant_type", "refresh_token", "error", err)
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to issue tokens")
@@ -176,7 +197,10 @@ func (s *Server) tokenRefreshToken(w http.ResponseWriter, r *http.Request) {
 
 // issueTokens создаёт пару access+refresh, привязывает к sub/client/scope/resource.
 // rotatedFrom != "" означает выпуск через refresh — сохраняется ссылка на предыдущий токен.
-func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource, rotatedFrom string) (*AccessToken, *RefreshToken, error) {
+//
+// family связывает всю цепочку, выросшую из одного грант-события: при обмене кода заводится
+// новая, при ротации наследуется прежняя. По ней гасится доступ, если всплывёт replay.
+func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource, rotatedFrom, family string) (*AccessToken, *RefreshToken, error) {
 	accessStr, err := randomToken()
 	if err != nil {
 		return nil, nil, err
@@ -184,6 +208,11 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 	refreshStr, err := randomToken()
 	if err != nil {
 		return nil, nil, err
+	}
+	if family == "" {
+		if family, err = randomToken(); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	now := time.Now()
@@ -194,6 +223,7 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 		Sub:       sub,
 		Scope:     scope,
 		Resource:  resource,
+		Family:    family,
 		ExpiresAt: now.Add(s.cfg.AccessTokenTTL),
 		CreatedAt: now,
 	}
@@ -209,6 +239,7 @@ func (s *Server) issueTokens(ctx context.Context, clientID, sub, scope, resource
 		Scope:       scope,
 		Resource:    resource,
 		RotatedFrom: rotatedFrom,
+		Family:      family,
 		Revoked:     false,
 		ExpiresAt:   now.Add(s.cfg.RefreshTokenTTL),
 		CreatedAt:   now,

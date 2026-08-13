@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Workflow Settings
 
-- **Never run builds or tests** - the user will build and test manually and report any errors
-- Do not run `go build`, `go test`, `go run`, or similar commands to verify changes
+- **Always verify after code changes** - run `go build ./...` and `go test ./...` after every change
+  and report the results; fix what the build or the tests report before handing work back
+- `go vet ./...` is expected to pass too
 
 ## Project Overview
 
@@ -104,13 +105,20 @@ in `handleToolsCall`. They come in families, each closed by one scope:
 - sales (`sales_report`, `top_products`, `customer_summary`) — `mcp:report:sales`
 - stock (`stock_balance`, `availability_report`) — `mcp:report:stock`
 - money (`cash_*`, `receivables_balance`, `payables_balance`, `purchases_report`) — `mcp:report:money`
-- production (`product_specification`, `specification_*`, `production_*`) — `mcp:report:cost`
+- production (`resolve_material`, `product_specification`, `specification_*`, `production_*`) — `mcp:report:cost`
 - admin (`event_log`, `object_history`, `find_document`) — `mcp:admin:eventlog`
+
+`mcp:report:cost` is not only a tool-level gate: it also widens what shared tools return
+(`resolve_warehouse` lists production warehouses, `stock_balance` / `availability_report` cover
+materials on them — 1C decides this from the `X-MCP-Scopes` header). Anything whose *content*
+depends on the caller's scopes must carry that fact in its `resolveCache` key — see
+`costScoped` in `internal/onec/client.go`, otherwise one cost-scoped call poisons the cache for
+everyone else until the TTL expires.
 
 Adding a tool means: a constant, a `ToolScopes` entry (a tool missing from the map is rejected as
 unknown), a definition in `GetTools`, a `case` in the dispatch, and the matching branch in the 1C
-side's `ScopeForReport` — the gate's scope map and 1C's must agree, since 1C re-checks the
-`X-MCP-Scopes` header. See `docs/api.md` for the user-facing argument reference.
+side's `ScopeForReport` / `ScopeForEntity` — the gate's scope map and 1C's must agree, since 1C
+re-checks the `X-MCP-Scopes` header. See `docs/api.md` for the user-facing argument reference.
 
 ## Configuration
 

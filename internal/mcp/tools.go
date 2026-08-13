@@ -4,6 +4,7 @@ const (
 	ToolResolveCustomer     = "resolve_customer"
 	ToolResolveWarehouse    = "resolve_warehouse"
 	ToolResolveProduct      = "resolve_product"
+	ToolResolveMaterial     = "resolve_material"
 	ToolProductDetails      = "product_details"
 	ToolSalesReport         = "sales_report"
 	ToolStockBalance        = "stock_balance"
@@ -83,6 +84,9 @@ var ToolScopes = map[string]string{
 	ToolFindDocument:  "mcp:admin:eventlog",
 	// Производственный блок целиком закрыт правом на себестоимость: спецификация раскрывает
 	// рецептуру продукта, а отчёты по выпуску — стоимость сырья в каждом изделии.
+	// resolve_material — часть того же контура: названия сырья спецификации и так раскрывают,
+	// но общий mcp:resolve производственную номенклатуру видеть не должен.
+	ToolResolveMaterial:          ScopeReportCost,
 	ToolProductSpecification:     ScopeReportCost,
 	ToolSpecificationCost:        ScopeReportCost,
 	ToolSpecificationExplode:     ScopeReportCost,
@@ -120,7 +124,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolResolveWarehouse,
-			Description: "Search warehouses by name or code. Returns a list of matching candidates for disambiguation.",
+			Description: "Search warehouses by name or code. Returns a list of matching candidates for disambiguation. Each candidate carries for_production (bool): a production warehouse — where materials are written off and finished goods are received. Those are returned only to callers holding the mcp:report:cost permission; without it they do not exist as far as this tool is concerned. Their UUIDs are accepted by production_output / production_consumption / production_document and (with the same permission) by stock_balance and availability_report.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -131,6 +135,28 @@ func GetTools() []Tool {
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of results to return (default: 10)",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        ToolResolveMaterial,
+			Description: "Search raw materials and components (сырьё, комплектующие, тара, этикетки) by name or article. This is the counterpart of resolve_product: the two split the same 1C item catalog and never overlap — resolve_product returns goods for sale, resolve_material returns items flagged as production-only, which resolve_product will never find. Returns id, label, code (артикул) and unit (the unit rates are expressed in). Feed the id into specification_where_used (which products consume this material), specification_explode, product_specification or production_consumption. Requires the mcp:report:cost permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (material name or article). Pass a UUID directly to look up a known material.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 10)",
+					},
+					"include_groups": map[string]any{
+						"type":        "boolean",
+						"description": "Include catalog groups (folders) in results.",
 					},
 				},
 				"required": []string{"query"},
@@ -344,7 +370,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolStockBalance,
-			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case.",
+			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case. Coverage depends on permissions: by default the report shows goods for sale on trading warehouses only. With the mcp:report:cost permission it also covers the production side — raw materials and components (see resolve_material) on production warehouses (see resolve_warehouse.for_production).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -360,12 +386,12 @@ func GetTools() []Tool {
 							"product_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by product IDs (from resolve_product). Accepts both leaf product UUIDs and group UUIDs (resolve_product with include_groups=true) — applied as IN HIERARCHY, so passing a group matches all products within it.",
+								"description": "Filter by product IDs (from resolve_product; with the mcp:report:cost permission also from resolve_material). Accepts both leaf product UUIDs and group UUIDs (resolve_product with include_groups=true) — applied as IN HIERARCHY, so passing a group matches all products within it.",
 							},
 							"warehouse_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by warehouse IDs (from resolve_warehouse)",
+								"description": "Filter by warehouse IDs (from resolve_warehouse). A production warehouse id is accepted only with the mcp:report:cost permission; without it such an id is silently ignored.",
 							},
 							"product_status": map[string]any{
 								"type":        "array",
@@ -404,7 +430,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolAvailabilityReport,
-			Description: "Get product availability (out-of-stock days) over a period from the daily stock register. For each SKU/group × warehouse (and optionally per week) returns oos_days (days out of stock), days (calendar days in the period), availability_pct (fraction 0..1 = in-stock days / days) and avg_qty (average daily balance). Use this to tell a demand-driven sales drop from a supply problem — 'was there simply nothing to sell?'. A day counts as out of stock when the end-of-day balance is <= 0. Items that were never stocked are excluded. Caveat: a SKU that was out of stock for the ENTIRE period (it dropped to zero before the window) has no rows and won't appear — combine with resolve_product status to spot active items with zero availability.",
+			Description: "Get product availability (out-of-stock days) over a period from the daily stock register. For each SKU/group × warehouse (and optionally per week) returns oos_days (days out of stock), days (calendar days in the period), availability_pct (fraction 0..1 = in-stock days / days) and avg_qty (average daily balance). Use this to tell a demand-driven sales drop from a supply problem — 'was there simply nothing to sell?'. A day counts as out of stock when the end-of-day balance is <= 0. Items that were never stocked are excluded. Caveat: a SKU that was out of stock for the ENTIRE period (it dropped to zero before the window) has no rows and won't appear — combine with resolve_product status to spot active items with zero availability. Like stock_balance, the report covers trading warehouses and goods for sale; the production side (materials on production warehouses) is included only with the mcp:report:cost permission.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -424,12 +450,12 @@ func GetTools() []Tool {
 							"product_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by product IDs (from resolve_product). Leaf or group UUIDs — applied as IN HIERARCHY.",
+								"description": "Filter by product IDs (from resolve_product; with the mcp:report:cost permission also from resolve_material). Leaf or group UUIDs — applied as IN HIERARCHY.",
 							},
 							"warehouse_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by warehouse IDs (from resolve_warehouse)",
+								"description": "Filter by warehouse IDs (from resolve_warehouse). A production warehouse id is accepted only with the mcp:report:cost permission; without it such an id is silently ignored.",
 							},
 						},
 					},
@@ -1021,7 +1047,7 @@ func GetTools() []Tool {
 				"properties": map[string]any{
 					"material_id": map[string]any{
 						"type":        "string",
-						"description": "Material UUID (from resolve_product — raw materials live in the same product catalog). Either material_id or material_ids is required.",
+						"description": "Material UUID (from resolve_material). Either material_id or material_ids is required.",
 					},
 					"material_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Several material UUIDs at once."},
 					"date":                map[string]any{"type": "string", "format": "date", "description": "Compositions as of this date (YYYY-MM-DD). Defaults to now."},
@@ -1171,7 +1197,7 @@ func productionSchema(output bool) map[string]any {
 		filters["material_ids"] = map[string]any{
 			"type":        "array",
 			"items":       map[string]any{"type": "string"},
-			"description": "Material UUIDs (from resolve_product); accepts group UUIDs — applied via IN HIERARCHY.",
+			"description": "Material UUIDs (from resolve_material); accepts group UUIDs — applied via IN HIERARCHY.",
 		}
 	}
 

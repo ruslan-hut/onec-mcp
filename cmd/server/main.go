@@ -188,6 +188,7 @@ func buildTenants(
 				Name:     rec.Name,
 				Handler:  api.NewHandler(onecClient, cfg, tlog),
 				APIToken: rec.APIToken,
+				Client:   onecClient,
 			}
 
 			if cfg.OAuth.Enabled {

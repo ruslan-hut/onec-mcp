@@ -36,8 +36,16 @@ func FromContext(ctx context.Context) *AuthInfo {
 	return v
 }
 
-func withAuth(ctx context.Context, info *AuthInfo) context.Context {
+// ContextWithAuth кладёт AuthInfo в контекст — парная к FromContext операция.
+// Экспортирована, чтобы соседние пакеты могли собрать контекст с правами вызывающего, не поднимая
+// весь AS: без неё логику, зависящую от scopes (ключи кэша в onec, per-tool ACL в mcp),
+// нельзя проверить иначе как сквозным OAuth-flow.
+func ContextWithAuth(ctx context.Context, info *AuthInfo) context.Context {
 	return context.WithValue(ctx, ctxKey{}, info)
+}
+
+func withAuth(ctx context.Context, info *AuthInfo) context.Context {
+	return ContextWithAuth(ctx, info)
 }
 
 // Middleware возвращает chi-совместимый wrapper: проверяет Bearer токен и обогащает context.

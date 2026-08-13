@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"example.com/mcp-sales-mvp/internal/oauth"
+	"example.com/mcp-sales-mvp/internal/onec"
 )
 
 // Tenant — рантайм-обвязка одной базы 1С: всё, что нужно, чтобы обслужить запрос по её слагу.
@@ -24,6 +25,19 @@ type Tenant struct {
 	// Verifier — TTL-кэш проверки MCP-ключей этой базы. Держим ссылку, чтобы фоновый тикер
 	// мог чистить просроченные записи. nil, когда OAuth выключен.
 	Verifier *oauth.CachedVerifier
+	// Client — клиент 1С этой базы. Держим ссылку только ради Close при вытеснении:
+	// у клиента есть фоновая горутина чистки кэша резолвов, и без остановки она пережила бы
+	// саму обвязку.
+	Client *onec.Client
+}
+
+// Close освобождает фоновые ресурсы обвязки. Вызывается реестром для баз, вытесненных
+// пересборкой. Безопасен для запросов, которые уже резолвнули эту обвязку и ещё выполняются:
+// останавливается только фоновая чистка, сам кэш остаётся рабочим до сборки мусора.
+func (t *Tenant) Close() {
+	if t.Client != nil {
+		t.Client.Close()
+	}
 }
 
 // BuildFunc собирает рантайм-обвязки всех включённых баз, читая их из хранилища.
@@ -68,9 +82,17 @@ func (r *Registry) Reload(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
+	old := r.ordered
 	r.byslug = byslug
 	r.ordered = tenants
 	r.mu.Unlock()
+
+	// Вытесненные обвязки закрываем ПОСЛЕ подмены — иначе запрос, попавший между Close и swap,
+	// получил бы базу с уже остановленной фоновой чисткой. Билдер всегда создаёт новые объекты,
+	// поэтому пересечения между old и tenants нет и закрыть можно всё.
+	for _, t := range old {
+		t.Close()
+	}
 
 	r.logger.Info("tenant registry reloaded", "count", len(tenants))
 	return nil

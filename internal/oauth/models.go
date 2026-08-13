@@ -39,12 +39,15 @@ type AuthCode struct {
 // AccessToken — opaque-токен. Lookup по PK на каждом запросе к /{tenant}/mcp.
 // Audience-привязка через Resource — токен валиден только для MCP-сервера своей базы.
 type AccessToken struct {
-	Token     string
-	Tenant    string
-	ClientID  string
-	Sub       string
-	Scope     string
-	Resource  string
+	Token    string
+	Tenant   string
+	ClientID string
+	Sub      string
+	Scope    string
+	Resource string
+	// Family — цепочка, выросшая из одного грант-события. Общая с refresh-токенами той же
+	// цепочки, чтобы отзыв при replay гасил и выданный доступ.
+	Family    string
 	ExpiresAt time.Time
 	CreatedAt time.Time
 }
@@ -59,9 +62,12 @@ type RefreshToken struct {
 	Scope       string
 	Resource    string
 	RotatedFrom string
-	Revoked     bool
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
+	// Family — общий идентификатор цепочки ротаций. Наследуется при каждом refresh, поэтому
+	// одного значения достаточно, чтобы найти и погасить всю цепочку целиком.
+	Family    string
+	Revoked   bool
+	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 // UserInfo — результат верификации access key (пока через dev_access_key,

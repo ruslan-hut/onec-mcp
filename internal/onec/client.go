@@ -64,6 +64,12 @@ func NewClient(s Settings, logger *slog.Logger) *Client {
 	}
 }
 
+// Close освобождает фоновые ресурсы клиента (сейчас — janitor кэша резолвов).
+// Вызывается реестром для баз, вытесненных при пересборке; после него клиент использовать нельзя.
+func (c *Client) Close() {
+	c.resolveCache.Close()
+}
+
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
 	var reqBody io.Reader
 	if body != nil {
@@ -178,8 +184,30 @@ func (c *Client) ResolveCustomer(ctx context.Context, query string, limit int, i
 	return &resp, nil
 }
 
+// scopeReportCost — дубль mcp.ScopeReportCost: пакет onec не может импортировать mcp
+// (обратная зависимость). При изменении значения править оба места.
+const scopeReportCost = "mcp:report:cost"
+
+// costScoped — есть ли у вызывающего право на себестоимость. От него зависит СОДЕРЖИМОЕ
+// ответа 1С (производственные склады в resolve_warehouse), поэтому признак обязан входить
+// в ключ кэша: иначе первый же вызов от cost-ключа отдал бы производственные склады
+// всем остальным до конца TTL.
+// auth == nil — легаси-режим без OAuth: заголовок X-MCP-Scopes не отправляется, 1С трактует
+// его отсутствие как полный доступ, поэтому здесь тоже true.
+func costScoped(ctx context.Context) bool {
+	auth := oauth.FromContext(ctx)
+	if auth == nil {
+		return true
+	}
+	return auth.HasScope(scopeReportCost)
+}
+
 func (c *Client) ResolveWarehouse(ctx context.Context, query string, limit int) (*ResolveWarehouseResponse, error) {
-	if cached, ok := c.resolveCache.Get("warehouse", query, limit); ok {
+	cacheKey := "warehouse"
+	if costScoped(ctx) {
+		cacheKey = "warehouse+production"
+	}
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
 		var resp ResolveWarehouseResponse
 		if err := json.Unmarshal(cached, &resp); err == nil {
 			return &resp, nil
@@ -193,7 +221,35 @@ func (c *Client) ResolveWarehouse(ctx context.Context, query string, limit int) 
 	}
 
 	if payload, err := json.Marshal(&resp); err == nil {
-		c.resolveCache.Set("warehouse", query, limit, payload)
+		c.resolveCache.Set(cacheKey, query, limit, payload)
+	}
+	return &resp, nil
+}
+
+// ResolveMaterial — поиск сырья и комплектующих по названию/артикулу. Отдельный эндпойнт 1С:
+// resolve_product отдаёт ровно обратный набор (номенклатуру БЕЗ пометки ДляПроизводства).
+// Инструмент закрыт правом mcp:report:cost, поэтому в ключе кэша признак прав не нужен —
+// без права вызов до клиента не доходит.
+func (c *Client) ResolveMaterial(ctx context.Context, query string, limit int, includeGroups bool) (*ResolveMaterialResponse, error) {
+	cacheKey := "material"
+	if includeGroups {
+		cacheKey = "material+groups"
+	}
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
+		var resp ResolveMaterialResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit, IncludeGroups: includeGroups}
+	var resp ResolveMaterialResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/material", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set(cacheKey, query, limit, payload)
 	}
 	return &resp, nil
 }

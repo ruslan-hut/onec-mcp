@@ -138,7 +138,6 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		"client_id", req.ClientID, "sub", user.Sub, "scope", allowedScope,
 	)
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
-	_ = client
 }
 
 // validateAuthorizeParams проверяет client_id/redirect_uri/PKCE-параметры до показа формы

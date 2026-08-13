@@ -154,6 +154,7 @@ Content-Type: application/json
 | `candidates[].label` | string | Human-readable name |
 | `candidates[].code` | string | Warehouse code (optional) |
 | `candidates[].archived` | boolean | Archive status |
+| `candidates[].for_production` | boolean | Production warehouse (материалы списываются / продукция приходуется). Returned only to callers with `mcp:report:cost`; other callers never see such warehouses at all. |
 
 ---
 
@@ -614,10 +615,16 @@ DPO denominator. Amounts are in the document currency.
 
 ## Production Tools (bills of materials & manufacturing)
 
-Nine tools gated by the **`mcp:report:cost`** scope — the same permission that unlocks the
+Ten tools gated by the **`mcp:report:cost`** scope — the same permission that unlocks the
 `cost` / `profit` / `margin` measures of `sales_report`. A bill of materials is the product's
 recipe and the production reports expose the cost of raw material in every item, so they carry
 the same sensitivity as purchase prices; no separate scope was introduced.
+
+The same scope also opens the production side of the shared tools: `resolve_warehouse` starts
+returning production warehouses (`for_production: true`), and `stock_balance` /
+`availability_report` start covering materials stocked on them. Without it the production
+contour does not exist as far as the API is concerned — 1C filters it out by the
+`ДляПроизводства` flag, and a production UUID passed in `filters` is silently dropped.
 
 A composition is identified by **four** keys: product + `matrix_id` (матрица) +
 `composition_type_id` (тип состава) + `production_group_id` (группировка производства). Omit the
@@ -628,6 +635,24 @@ before summing. There are no resolvers for those three catalogs: take their UUID
 Known limits of the underlying configuration, worth stating before the user asks: there is no
 waste accounting (the Отходы table of the production document carries no fields at all) and no
 labour or overhead in production — the cost of output is materials only.
+
+### `resolve_material`
+
+Search raw materials and components by name or article — the counterpart of `resolve_product`.
+Both read the same 1C item catalog and split it by the `ДляПроизводства` flag, so the two result
+sets never overlap: what `resolve_material` returns, `resolve_product` will never find, and vice
+versa. Without it a material UUID could only be harvested from the output of some other
+composition report.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `query` | string | Yes | Material name or article. A UUID is looked up directly. |
+| `limit` | integer | No | Max results (default 10). |
+| `include_groups` | boolean | No | Include catalog groups (folders). |
+
+Response: `candidates[]` with `id`, `label`, `code` (артикул), `unit` (the unit the consumption
+rates are expressed in) and `archived`. Feed `id` into `specification_where_used`,
+`specification_explode`, `product_specification` or `production_consumption`.
 
 ### `product_specification`
 
@@ -685,7 +710,7 @@ not appear, even though its old record still lives in the register slice.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
-| `material_id` / `material_ids` | string / array | Yes | Material UUIDs (from `resolve_product` — raw materials share the product catalog). |
+| `material_id` / `material_ids` | string / array | Yes | Material UUIDs (from `resolve_material`). |
 | `date` | string | No | Compositions as of this date. |
 | `matrix_id`, `composition_type_id`, `production_group_id` | string | No | Narrow to one variant. |
 | `limit` | integer | No | Max rows (default 100, max 500). |

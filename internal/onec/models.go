@@ -73,10 +73,30 @@ type WarehouseCandidate struct {
 	Label    string `json:"label"`
 	Code     string `json:"code,omitempty"`
 	Archived bool   `json:"archived"`
+	// ForProduction — производственный склад (реквизит ДляПроизводства). Такие склады 1С
+	// отдаёт только ключу с mcp:report:cost; для остальных прав их в выдаче просто нет.
+	// omitempty не ставим: false — значимый ответ («это торговый склад»).
+	ForProduction bool `json:"for_production"`
 }
 
 type ResolveWarehouseResponse struct {
 	Candidates []WarehouseCandidate `json:"candidates"`
+}
+
+// MaterialCandidate — сырьё/комплектующие (номенклатура с пометкой ДляПроизводства).
+// Живёт в том же справочнике Товары, что и ProductCandidate, но без статусных атрибутов:
+// статус ЖЦ, рынки и сертификация описывают витрину и к сырью неприменимы. Вместо них —
+// единица измерения, в которой заданы нормы расхода в спецификации.
+type MaterialCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Code     string `json:"code,omitempty"`
+	Unit     string `json:"unit,omitempty"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveMaterialResponse struct {
+	Candidates []MaterialCandidate `json:"candidates"`
 }
 
 // CodeLabel — пара «стабильный код + человекочитаемая метка» для статусных атрибутов,

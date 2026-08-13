@@ -130,7 +130,13 @@ func (h *Handler) clampTop(top flexInt) int {
 
 // clampTopDefault — то же, но с собственным значением по умолчанию. Нужно для top_products,
 // где «сколько-нибудь» разумнее трактовать как 10, а не как весь max_rows.
+//
+// max_rows — потолок и для def: иначе вызывающий с завышенным дефолтом протаскивал бы мимо
+// лимита ровно то, ради чего лимит и заведён.
 func (h *Handler) clampTopDefault(top flexInt, def int) int {
+	if def > h.cfg.Limits.MaxRows {
+		def = h.cfg.Limits.MaxRows
+	}
 	v := int(top)
 	if v <= 0 {
 		return def
