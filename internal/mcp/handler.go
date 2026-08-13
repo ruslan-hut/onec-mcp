@@ -660,12 +660,14 @@ func (h *Handler) callPayablesBalance(r *http.Request, args any) (*CallToolResul
 }
 
 type purchasesArgs struct {
-	Period   onec.Period           `json:"period"`
-	Filters  onec.PurchasesFilters `json:"filters"`
-	GroupBy  []string              `json:"group_by"`
-	Measures []string              `json:"measures"`
-	Top      flexInt               `json:"top"`
-	Sort     []onec.SortSpec       `json:"sort"`
+	Period  onec.Period           `json:"period"`
+	Filters onec.PurchasesFilters `json:"filters"`
+	// InTransit — булево или строка "any"; интерпретирует значение 1С, гейт только пробрасывает
+	InTransit interface{}     `json:"in_transit"`
+	GroupBy   []string        `json:"group_by"`
+	Measures  []string        `json:"measures"`
+	Top       flexInt         `json:"top"`
+	Sort      []onec.SortSpec `json:"sort"`
 }
 
 func (h *Handler) callPurchasesReport(r *http.Request, args any) (*CallToolResult, error) {
@@ -677,12 +679,13 @@ func (h *Handler) callPurchasesReport(r *http.Request, args any) (*CallToolResul
 	top := h.clampTop(a.Top)
 
 	req := &onec.PurchasesRequest{
-		Period:   a.Period,
-		Filters:  a.Filters,
-		GroupBy:  a.GroupBy,
-		Measures: a.Measures,
-		Top:      top,
-		Sort:     a.Sort,
+		Period:    a.Period,
+		Filters:   a.Filters,
+		InTransit: a.InTransit,
+		GroupBy:   a.GroupBy,
+		Measures:  a.Measures,
+		Top:       top,
+		Sort:      a.Sort,
 	}
 
 	resp, err := h.onecClient.Purchases(r.Context(), req)
