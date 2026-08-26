@@ -73,16 +73,22 @@ key may see **without the gate knowing anything about firms**.
 Expected behaviour on the 1C side:
 
 1. read `X-MCP-Sub`, find the account, take its list of allowed firms;
-2. an empty list means **no restriction** — every firm is allowed;
+2. an empty list means **no restriction** — data is not sliced by firm at all. The restriction is
+   switched on by the mere presence of rows on the account: one row, one firm; several rows,
+   several firms. There is no "default firm" setting anywhere — the restriction lives on the
+   account and nowhere else;
 3. if `filters.firm_ids` is absent, substitute the allowed list (report is aggregated over the
    firms the key may see, not over the whole database);
 4. if `filters.firm_ids` is present, intersect it with the allowed list;
-5. an empty intersection must return **403** `{"error":"FORBIDDEN","message":"firm not allowed"}` —
+5. if the ids in `filters.firm_ids` resolve to no existing firm at all, return **400** — silently
+   replacing them with the allowed list would answer about firms nobody asked for;
+6. an empty intersection must return **403** `{"error":"FORBIDDEN","message":"firm not allowed"}` —
    not an empty report, which an LLM would read as "there were no sales";
-6. `resolve/firm` returns only allowed firms, so the list itself does not disclose the group
+7. `resolve/firm` returns only allowed firms, so the list itself does not disclose the group
    structure;
-7. no `X-MCP-Sub` (legacy static-token mode, OAuth off) — fall back to a single default firm from a
-   constant rather than opening the whole group.
+8. no `X-MCP-Sub` (legacy static-token mode, OAuth off) — no restriction either, for the same
+   reason as an empty list: the restriction lives on the account, and without one there is
+   nothing to restrict by.
 
 Trust model is the same as for `X-MCP-Scopes`: the header is trusted because 1C is published only
 for the gateway behind basic auth. The **request body is not trusted** — never take the list of
