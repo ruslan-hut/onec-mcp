@@ -11,6 +11,7 @@ The Go service acts as a gateway and expects 1C to provide three HTTP endpoints:
 | `POST /mcp/resolve/customer` | Search customers |
 | `POST /mcp/resolve/warehouse` | Search warehouses |
 | `POST /mcp/resolve/product` | Search products |
+| `POST /mcp/resolve/firm` | Search firms / legal entities (Фирмы / Организации) |
 | `POST /mcp/reports/sales` | Generate sales report |
 | `POST /mcp/reports/stock` | Stock balance report |
 | `POST /mcp/reports/availability` | Availability (out-of-stock days) report — see `category-watchdog-contract.md` |
@@ -43,6 +44,52 @@ as-is, so fields can be added on the 1C side without touching Go:
 
 See `api.md` for the argument reference; the 1C side lives in `CommonModules/MCP` (region
 `Production`).
+
+## Firms (multi-company) and the `X-MCP-Sub` header
+
+A **firm** is the legal entity a document is issued by: `Справочник.Фирмы` in rior-cf,
+`Справочник.Организации` in УПП. Every report accepts `filters.firm_ids` and offers `firm` as a
+`group_by` dimension, and `POST /mcp/resolve/firm` resolves a firm by name or code.
+
+### Endpoint: Resolve Firm
+
+```
+POST {base_url}/mcp/resolve/firm
+{"query": "ТОВ Ромашка", "limit": 10}
+```
+
+Response — the usual candidate shape:
+
+```json
+{"candidates": [{"id": "…-uuid", "label": "ТОВ «Ромашка»", "code": "001", "archived": false}]}
+```
+
+### Per-key firm restriction
+
+Alongside `X-MCP-Scopes` the gate sends **`X-MCP-Sub`** — the UUID of the MCP account, exactly the
+`sub` value 1C itself returned from `/mcp/auth/verify`. This lets 1C restrict which firms a given
+key may see **without the gate knowing anything about firms**.
+
+Expected behaviour on the 1C side:
+
+1. read `X-MCP-Sub`, find the account, take its list of allowed firms;
+2. an empty list means **no restriction** — every firm is allowed;
+3. if `filters.firm_ids` is absent, substitute the allowed list (report is aggregated over the
+   firms the key may see, not over the whole database);
+4. if `filters.firm_ids` is present, intersect it with the allowed list;
+5. an empty intersection must return **403** `{"error":"FORBIDDEN","message":"firm not allowed"}` —
+   not an empty report, which an LLM would read as "there were no sales";
+6. `resolve/firm` returns only allowed firms, so the list itself does not disclose the group
+   structure;
+7. no `X-MCP-Sub` (legacy static-token mode, OAuth off) — fall back to a single default firm from a
+   constant rather than opening the whole group.
+
+Trust model is the same as for `X-MCP-Scopes`: the header is trusted because 1C is published only
+for the gateway behind basic auth. The **request body is not trusted** — never take the list of
+allowed firms from it.
+
+Where firms are not used to separate access, implement step 1 as a stub returning an empty list;
+everything else then degrades to a no-op.
 
 ## Authentication
 
@@ -278,6 +325,7 @@ Content-Type: application/json
 | `period.to` | string | Yes | End date (YYYY-MM-DD) |
 | `filters.customer_ids` | array | No | Filter by customer GUIDs |
 | `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
+| `filters.firm_ids` | array | No | Filter by firm GUIDs (from `/mcp/resolve/firm`). Absent = all firms the key may see — see the firms section above. |
 | `group_by` | array | No | Grouping dimensions |
 | `measures` | array | No | Measures to calculate |
 | `top` | integer | No | Max rows to return |
@@ -372,6 +420,7 @@ Content-Type: application/json
 | `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment on the 1C side. |
 | `filters.product_ids` | array | No | Filter by product GUIDs |
 | `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
+| `filters.firm_ids` | array | No | Filter by firm GUIDs (from `/mcp/resolve/firm`). Absent = all firms the key may see — see the firms section above. |
 | `filters.product_status` | array | No | Фильтр по статусу ЖЦ: подмножество `new` \| `active` \| `phasing_out` \| `excluded`. На 1С разворачивается в пред-резолв ссылок по статусу (не условие на `Balance()`). |
 | `group_by` | array | No | Grouping dimensions |
 | `measures` | array | No | Measures to calculate |

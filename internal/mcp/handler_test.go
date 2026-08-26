@@ -425,3 +425,74 @@ func TestClampLimits(t *testing.T) {
 		}
 	})
 }
+
+// TestFirmFilterReachesOneC — фильтр по фирме объявлен в структурах фильтров всех отчётов,
+// а не только у взаиморасчётов/закупок. Ключи, не объявленные в структуре, mapToStruct молча
+// выбрасывает — поэтому пропущенное поле проявилось бы как «фильтр применился», хотя в 1С
+// он не доехал, и цифры вернулись бы по всем фирмам.
+func TestFirmFilterReachesOneC(t *testing.T) {
+	cases := []struct {
+		tool string
+		path string
+		args map[string]any
+	}{
+		{ToolSalesReport, "/mcp/reports/sales", map[string]any{
+			"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
+		}},
+		{ToolStockBalance, "/mcp/reports/stock", map[string]any{}},
+		{ToolAvailabilityReport, "/mcp/reports/availability", map[string]any{
+			"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
+		}},
+		{ToolTopProducts, "/mcp/reports/top_products", map[string]any{
+			"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
+		}},
+		{ToolCashBalance, "/mcp/reports/cash_balance", map[string]any{}},
+		{ToolCashFlow, "/mcp/reports/cash_flow", map[string]any{
+			"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			h, fake := newTestHandler(t)
+
+			args := map[string]any{}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			args["filters"] = map[string]any{"firm_ids": []string{"firm-1"}}
+
+			callTool(t, h, tc.tool, args)
+
+			got := fake.recorded(t, 0)
+			if got.path != tc.path {
+				t.Fatalf("path = %s, want %s", got.path, tc.path)
+			}
+
+			filters, ok := got.body["filters"].(map[string]any)
+			if !ok {
+				t.Fatalf("filters missing in %v", got.body)
+			}
+			ids, ok := filters["firm_ids"].([]any)
+			if !ok || len(ids) != 1 || ids[0] != "firm-1" {
+				t.Errorf("firm_ids = %v, want [firm-1]", filters["firm_ids"])
+			}
+		})
+	}
+}
+
+// TestResolveFirmCallsOneC — маршрут нового резолвера: инструмент должен ходить
+// в /mcp/resolve/firm, а не переиспользовать чужой эндпойнт.
+func TestResolveFirmCallsOneC(t *testing.T) {
+	h, fake := newTestHandler(t)
+
+	callTool(t, h, ToolResolveFirm, map[string]any{"query": "ТОВ"})
+
+	got := fake.recorded(t, 0)
+	if got.path != "/mcp/resolve/firm" {
+		t.Fatalf("path = %s, want /mcp/resolve/firm", got.path)
+	}
+	if got.body["query"] != "ТОВ" {
+		t.Errorf("query = %v, want ТОВ", got.body["query"])
+	}
+}

@@ -516,6 +516,40 @@ Execute a tool with arguments.
 
 ---
 
+## Firms (multi-company)
+
+A **firm** is the legal entity a document is issued by — `Справочник.Фирмы` in one database,
+`Справочник.Организации` in another. It is a reporting dimension (`group_by: ["firm"]`) and a
+filter (`filters.firm_ids`) available on every report.
+
+### `resolve_firm`
+
+Search firms by name or code.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `query` | string | Yes | Firm name or code. |
+| `limit` | integer | No | Max candidates (default 10). |
+
+**Response:** `{"candidates":[{"id","label","code","archived"}]}`
+
+Requires the `mcp:resolve` permission.
+
+### Access control
+
+In a multi-company database an access key may be limited to a **subset of firms**. The limit lives
+in 1C, on the key's own card — the gateway forwards the authenticated account (`X-MCP-Sub`) and 1C
+applies the restriction itself. Consequences for a caller:
+
+- `resolve_firm` returns only the firms the key may see;
+- omitting `filters.firm_ids` means *all firms the key may see*, not all firms in the database;
+- passing a firm the key may not see fails the whole call with **403 FORBIDDEN**, rather than
+  silently returning an empty report;
+- because the visible set depends on the key, `resolve_firm` results are cached **per account**.
+
+In a single-company database, or where firms are not used to separate access, every key sees every
+firm and the rules above are a no-op.
+
 ## Money Report Tools (cash, settlements & purchases)
 
 Five report tools gated by the **`mcp:report:money`** scope (they expose money figures). Like other
@@ -532,7 +566,8 @@ Cash-on-hand balance from the «ДеньгиВКассе» register as of a date
 |----------|------|----------|-------------|
 | `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
 | `filters.cash_ids` | array | No | Cash desk UUIDs (from `resolve_cash`). |
-| `group_by` | array | No | `cash`, `firm` (default: `cash`). firm = owning company of the cash desk. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
+| `group_by` | array | No | `cash`, `firm` (default: `cash`). firm = owning company of the cash desk (see `resolve_firm`). |
 | `measures` | array | No | `balance` (default). |
 | `top` | integer | No | Limit rows. |
 | `sort` | array | No | `[{field, dir}]`. |
@@ -553,6 +588,7 @@ currency only (the register's duplicate management-accounting-currency row is ex
 | `filters.operation_ids` | array | No | Operation type UUIDs (from `resolve_operation`); applied to the `ВидОперации` dimension. |
 | `filters.cost_article_ids` | array | No | Cost article UUIDs (from `resolve_cost_article`); filters the `analytics` dimension via IN HIERARCHY. Combined with `customer_ids` via OR. |
 | `filters.customer_ids` | array | No | Counterparty UUIDs (from `resolve_customer`); filters the `analytics` dimension. Combined with `cost_article_ids` via OR. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
 | `group_by` | array | No | `account`, `operation`, `analytics`, `firm`, `day`, `week`, `month` (default: `operation`). `analytics` is composite, returned as `{id,label,kind}`; day/week/month return ISO date strings. |
 | `measures` | array | No | `inflow` (gross in), `outflow` (gross out, positive), `net` (= inflow − outflow). Default: all three. |
 | `top` | integer | No | Limit rows. |
@@ -564,8 +600,7 @@ separate measures, split by the sign of each counterparty's net balance. The reg
 contract/order dimension, so for a single counterparty a receivable and an advance across different
 deals are already netted into one figure — expansion is across counterparties, not within one.
 Suppliers share the counterparty catalog with customers, so supplier UUIDs are resolved via
-`resolve_customer`. There is no firm resolver — obtain firm UUIDs from a prior call with
-`group_by=["firm"]`.
+`resolve_customer`; firm UUIDs — via `resolve_firm`.
 
 ### `receivables_balance`
 
@@ -575,7 +610,7 @@ Accounts receivable from customers (ДЗ — what customers owe us) as of a date
 |----------|------|----------|-------------|
 | `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
 | `filters.customer_ids` | array | No | Customer UUIDs (from `resolve_customer`); accepts customer-group UUIDs — applied via IN HIERARCHY. |
-| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
 | `group_by` | array | No | `customer`, `firm` (default: `customer`). |
 | `measures` | array | No | `receivable` (ДЗ), `advance` (prepayments received), `net` (= receivable − advance). Default: all three. |
 | `top` | integer | No | Limit rows. |
@@ -589,7 +624,7 @@ Accounts payable to suppliers (КЗ — what we owe suppliers) as of a date, bro
 |----------|------|----------|-------------|
 | `date` | string | No | Balance date (YYYY-MM-DD). Defaults to current moment. |
 | `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer` — shared catalog); accepts group UUIDs — applied via IN HIERARCHY. |
-| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
 | `group_by` | array | No | `supplier`, `firm` (default: `supplier`). |
 | `measures` | array | No | `payable` (КЗ), `advance` (prepayments issued), `net` (= payable − advance). Default: all three. |
 | `top` | integer | No | Limit rows. |
@@ -615,7 +650,7 @@ The flag is read from `ВПути` **or** `Статус.Предваритель
 |----------|------|----------|-------------|
 | `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
 | `filters.supplier_ids` | array | No | Supplier UUIDs (from `resolve_customer`); accepts group UUIDs — applied via IN HIERARCHY. |
-| `filters.firm_ids` | array | No | Firm (UA/PL legal entity) UUIDs. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
 | `filters.product_ids` | array | No | Product UUIDs; leaf or group — applied via IN HIERARCHY. |
 | `filters.warehouse_ids` | array | No | Receiving warehouse UUIDs. |
 | `in_transit` | boolean / string | No | `false` (default) — arrived goods only; `true` — in-transit only; `"any"` — both. |

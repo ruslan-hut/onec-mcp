@@ -194,3 +194,67 @@ func TestScopeHeadersForwarded(t *testing.T) {
 		t.Errorf("X-MCP-Scopes = %q, want comma-separated list", gotScopes)
 	}
 }
+
+// withSub — контекст с конкретной учётной записью. Для resolve_firm важен именно sub:
+// список видимых фирм задаётся правами учётки в 1С, а не scope.
+func withSub(t *testing.T, sub string) context.Context {
+	t.Helper()
+	return oauth.ContextWithAuth(context.Background(), &oauth.AuthInfo{
+		Sub:    sub,
+		Scopes: []string{"mcp:resolve"},
+		Scope:  "mcp:resolve",
+	})
+}
+
+// TestResolveFirmCacheIsAccountSeparated — тот же класс ошибки, что и с производственными
+// складами, но разделитель другой: в многофирменной базе 1С отдаёт только фирмы, разрешённые
+// КЛЮЧУ. Если sub не входит в ключ кэша, первый же вызов раздаёт свой список фирм всем
+// остальным учёткам до конца TTL — то есть раскрывает структуру группы компаний.
+func TestResolveFirmCacheIsAccountSeparated(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"candidates":[]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(Settings{
+		BaseURL:         srv.URL,
+		Timeout:         5 * time.Second,
+		ReportTimeout:   5 * time.Second,
+		ResolveCacheTTL: time.Minute,
+	}, testLogger())
+	defer client.Close()
+
+	if _, err := client.ResolveFirm(withSub(t, "acc-1"), "тов", 10); err != nil {
+		t.Fatalf("acc-1 call: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("hits = %d, want 1", got)
+	}
+
+	// Другая учётная запись — обязан быть свой запрос в 1С.
+	if _, err := client.ResolveFirm(withSub(t, "acc-2"), "тов", 10); err != nil {
+		t.Fatalf("acc-2 call: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("hits = %d, want 2 — вторая учётка получила чужой список фирм из кэша", got)
+	}
+
+	// Повтор той же учёткой — из кэша.
+	if _, err := client.ResolveFirm(withSub(t, "acc-2"), "тов", 10); err != nil {
+		t.Fatalf("acc-2 repeat: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("hits = %d, want 2 — повтор той же учёткой должен браться из кэша", got)
+	}
+
+	// Легаси-режим без OAuth: sub нет, сегмент общий — но со своим списком, не с чужим.
+	if _, err := client.ResolveFirm(context.Background(), "тов", 10); err != nil {
+		t.Fatalf("legacy call: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Errorf("hits = %d, want 3 — легаси-вызов не должен брать выдачу учётки из кэша", got)
+	}
+}

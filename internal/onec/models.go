@@ -142,6 +142,20 @@ type ResolveSalesChannelResponse struct {
 	Candidates []SalesChannelCandidate `json:"candidates"`
 }
 
+// FirmCandidate — юрлицо (фирма/организация), от имени которого оформлены документы.
+// В rior-cf это Справочник.Фирмы, в УПП — Справочник.Организации. Резолвер появился, чтобы
+// не добывать UUID фирмы побочным вызовом отчёта с group_by=["firm"].
+type FirmCandidate struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Code     string `json:"code,omitempty"`
+	Archived bool   `json:"archived"`
+}
+
+type ResolveFirmResponse struct {
+	Candidates []FirmCandidate `json:"candidates"`
+}
+
 type Period struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -172,6 +186,10 @@ type SalesFilters struct {
 	CustomerCohort string `json:"customer_cohort,omitempty"`
 	// ProductStatus — фильтр по логическому статусу ЖЦ позиции (см. StockFilters.ProductStatus).
 	ProductStatus []string `json:"product_status,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *SalesFilters) UnmarshalJSON(data []byte) error {
@@ -232,6 +250,10 @@ type StockFilters struct {
 	// На стороне 1С разворачивается в пред-резолв ссылок товаров по статусу, а НЕ в условие на
 	// виртуальную таблицу Balance() — иначе теряется таблица итогов и Balance() уходит в таймаут.
 	ProductStatus []string `json:"product_status,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *StockFilters) UnmarshalJSON(data []byte) error {
@@ -263,6 +285,10 @@ type StockReportResponse struct {
 type AvailabilityFilters struct {
 	ProductIDs   []string `json:"product_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *AvailabilityFilters) UnmarshalJSON(data []byte) error {
@@ -316,6 +342,10 @@ type CashFilters struct {
 	OperationIDs   []string `json:"operation_ids,omitempty"`
 	CostArticleIDs []string `json:"cost_article_ids,omitempty"`
 	CustomerIDs    []string `json:"customer_ids,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *CashFilters) UnmarshalJSON(data []byte) error {
@@ -332,6 +362,10 @@ func (f *CashFilters) UnmarshalJSON(data []byte) error {
 // по видам операций или аналитике нечем, у регистра ДеньгиВКассе единственное измерение Касса.
 type CashBalanceFilters struct {
 	CashIDs []string `json:"cash_ids,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *CashBalanceFilters) UnmarshalJSON(data []byte) error {
@@ -396,6 +430,10 @@ type CashReportResponse struct {
 type TopProductsFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
+	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
+	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.
+	FirmIDs []string `json:"firm_ids,omitempty"`
 }
 
 func (f *TopProductsFilters) UnmarshalJSON(data []byte) error {

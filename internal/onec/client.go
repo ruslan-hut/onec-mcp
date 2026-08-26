@@ -298,6 +298,40 @@ func (c *Client) ResolveSalesChannel(ctx context.Context, query string, limit in
 	return &resp, nil
 }
 
+// ResolveFirm — поиск фирмы (юрлица) по названию. В многофирменных базах видимый набор
+// фирм зависит от прав учётной записи, а не только от scope, поэтому в ключ кэша входит sub
+// вызывающего: иначе выдача одной учётки досталась бы другой с иным списком разрешённых фирм.
+func (c *Client) ResolveFirm(ctx context.Context, query string, limit int) (*ResolveFirmResponse, error) {
+	cacheKey := "firm|" + firmCacheScope(ctx)
+	if cached, ok := c.resolveCache.Get(cacheKey, query, limit); ok {
+		var resp ResolveFirmResponse
+		if err := json.Unmarshal(cached, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	req := ResolveRequest{Query: query, Limit: limit}
+	var resp ResolveFirmResponse
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/resolve/firm", req, &resp); err != nil {
+		return nil, err
+	}
+
+	if payload, err := json.Marshal(&resp); err == nil {
+		c.resolveCache.Set(cacheKey, query, limit, payload)
+	}
+	return &resp, nil
+}
+
+// firmCacheScope — часть ключа кэша, разделяющая выдачу resolve_firm по учётным записям.
+// Без OAuth (легаси-режим со статическим токеном) учётка одна на всех — общий сегмент "-".
+func firmCacheScope(ctx context.Context) string {
+	auth := oauth.FromContext(ctx)
+	if auth == nil || auth.Sub == "" {
+		return "-"
+	}
+	return auth.Sub
+}
+
 func (c *Client) ResolveCash(ctx context.Context, query string, limit int) (*ResolveCashResponse, error) {
 	if cached, ok := c.resolveCache.Get("cash", query, limit); ok {
 		var resp ResolveCashResponse

@@ -204,6 +204,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callResolveMaterial(r, params.Arguments)
 	case ToolResolveSalesChannel:
 		result, err = h.callResolveSalesChannel(r, params.Arguments)
+	case ToolResolveFirm:
+		result, err = h.callResolveFirm(r, params.Arguments)
 	case ToolResolveCash:
 		result, err = h.callResolveCash(r, params.Arguments)
 	case ToolResolveCostArticle:
@@ -410,6 +412,29 @@ func (h *Handler) callResolveSalesChannel(r *http.Request, args any) (*CallToolR
 	limit := h.clampLimit(a.Limit)
 
 	resp, err := h.onecClient.ResolveSalesChannel(r.Context(), a.Query, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(data))},
+	}, nil
+}
+
+func (h *Handler) callResolveFirm(r *http.Request, args any) (*CallToolResult, error) {
+	var a resolveArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	limit := h.clampLimit(a.Limit)
+
+	resp, err := h.onecClient.ResolveFirm(r.Context(), a.Query, limit)
 	if err != nil {
 		return nil, err
 	}

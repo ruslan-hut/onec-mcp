@@ -12,6 +12,7 @@ const (
 	ToolTopProducts         = "top_products"
 	ToolCustomerSummary     = "customer_summary"
 	ToolResolveSalesChannel = "resolve_sales_channel"
+	ToolResolveFirm         = "resolve_firm"
 	ToolResolveCash         = "resolve_cash"
 	ToolResolveCostArticle  = "resolve_cost_article"
 	ToolResolveOperation    = "resolve_operation"
@@ -54,18 +55,22 @@ var CostMeasures = []string{"cost", "profit", "margin"}
 // Проверяется в handleToolsCall и используется для фильтрации tools/list по правам пользователя.
 // При добавлении нового инструмента — обязательно прописать его сюда, иначе вызов будет отказан.
 var ToolScopes = map[string]string{
-	ToolResolveCustomer:     "mcp:resolve",
-	ToolResolveWarehouse:    "mcp:resolve",
-	ToolResolveProduct:      "mcp:resolve",
-	ToolProductDetails:      "mcp:resolve",
-	ToolSalesReport:         "mcp:report:sales",
-	ToolStockBalance:        "mcp:report:stock",
-	ToolAvailabilityReport:  "mcp:report:stock",
+	ToolResolveCustomer:    "mcp:resolve",
+	ToolResolveWarehouse:   "mcp:resolve",
+	ToolResolveProduct:     "mcp:resolve",
+	ToolProductDetails:     "mcp:resolve",
+	ToolSalesReport:        "mcp:report:sales",
+	ToolStockBalance:       "mcp:report:stock",
+	ToolAvailabilityReport: "mcp:report:stock",
 	// Товары в пути — те же остатки, только в отдельном регистре: право как у stock_balance.
-	ToolGoodsInTransit: "mcp:report:stock",
+	ToolGoodsInTransit:      "mcp:report:stock",
 	ToolTopProducts:         "mcp:report:sales",
 	ToolCustomerSummary:     "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
+	// Фирма (юрлицо) — измерение отчётов, а не чувствительные данные сама по себе:
+	// общий mcp:resolve. В многофирменных базах видимый список дополнительно урезается
+	// правами учётной записи на стороне 1С.
+	ToolResolveFirm: "mcp:resolve",
 	// Кассы / виды операций / статьи затрат используются ТОЛЬКО денежными отчётами, поэтому их
 	// резолверы закрыты тем же scope mcp:report:money — иначе пользователь без доступа к деньгам
 	// видел бы резолверы, ссылающиеся в описании на недоступные cash_flow/cash_balance, и мог бы
@@ -226,8 +231,26 @@ func GetTools() []Tool {
 			},
 		},
 		{
+			Name:        ToolResolveFirm,
+			Description: "Search firms (legal entities the documents are issued by — Фирмы / Организации) by name or code. Returns candidates whose UUIDs go into the firm_ids filter or let you read the firm dimension of a report. In multi-company databases an access key may be restricted to a subset of firms — this tool returns only the firms the current key is allowed to see, and reports are limited to the same set even when firm_ids is omitted.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (firm name or code)",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 10)",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), warehouse_ids, sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer), and — for users with the mcp:report:cost permission — cost (purchase cost), profit (amount - cost), margin (profit / amount, percent). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, warehouses, sales_channels, customer_cohort, new_since). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), warehouse_ids, firm_ids (from resolve_firm), sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, firm, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer), and — for users with the mcp:report:cost permission — cost (purchase cost), profit (amount - cost), margin (profit / amount, percent). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, warehouses, sales_channels, customer_cohort, new_since). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -252,6 +275,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"customer_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
@@ -281,7 +309,7 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "seller", "sales_channel", "day", "week", "month", "cohort", "product_group", "customer_group"}},
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "customer", "product", "seller", "sales_channel", "day", "week", "month", "cohort", "product_group", "customer_group", "firm"}},
 						"description": "Group results by dimensions. day/week/month bucket by document date. cohort splits rows into 'new' vs 'returning' customers. product_group / customer_group aggregate by parent group of the hierarchical catalog. Do not combine a leaf dim with its group (customer+customer_group, product+product_group) — the group column would be fully determined by the leaf and adds no information; the server silently drops the redundant *_group in that case.",
 					},
 					"measures": map[string]any{
@@ -327,6 +355,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"customer_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific customers"},
 							"warehouse_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific warehouses"},
 						},
@@ -373,7 +406,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolStockBalance,
-			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case. Coverage depends on permissions: by default the report shows goods for sale on trading warehouses only. With the mcp:report:cost permission it also covers the production side — raw materials and components (see resolve_material) on production warehouses (see resolve_warehouse.for_production).",
+			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group, firm), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case. Coverage depends on permissions: by default the report shows goods for sale on trading warehouses only. With the mcp:report:cost permission it also covers the production side — raw materials and components (see resolve_material) on production warehouses (see resolve_warehouse.for_production).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -386,6 +419,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"product_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
@@ -405,7 +443,7 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product", "product_group"}},
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product", "product_group", "firm"}},
 						"description": "Group results by dimensions",
 					},
 					"measures": map[string]any{
@@ -450,6 +488,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"product_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
@@ -464,7 +507,7 @@ func GetTools() []Tool {
 					},
 					"group_by": map[string]any{
 						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"product", "product_group", "warehouse", "week"}},
+						"items":       map[string]any{"type": "string", "enum": []string{"product", "product_group", "warehouse", "week", "firm"}},
 						"description": "Group results by dimensions. Default: product + warehouse. Use week to bucket metrics per ISO week; product_group aggregates by the parent товарная группа.",
 					},
 					"measures": map[string]any{
@@ -564,6 +607,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"cash_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
@@ -618,6 +666,11 @@ func GetTools() []Tool {
 						"type":        "object",
 						"description": "Optional filters",
 						"properties": map[string]any{
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
 							"cash_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
@@ -692,7 +745,7 @@ func GetTools() []Tool {
 							"firm_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a previous call with group_by=[\"firm\"] (there is no separate firm resolver).",
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
 							},
 						},
 					},
@@ -747,7 +800,7 @@ func GetTools() []Tool {
 							"firm_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a previous call with group_by=[\"firm\"] (there is no separate firm resolver).",
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
 							},
 						},
 					},
@@ -806,7 +859,7 @@ func GetTools() []Tool {
 							"firm_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a call with group_by=[\"firm\"] (there is no separate firm resolver).",
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
 							},
 							"product_ids": map[string]any{
 								"type":        "array",
@@ -884,7 +937,7 @@ func GetTools() []Tool {
 							"firm_ids": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "Filter by firm (UA/PL legal entity) IDs. Take firm UUIDs from a call with group_by=[\"firm\"] — there is no firm resolver.",
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
 							},
 							"status_ids": map[string]any{
 								"type":        "array",
@@ -1274,7 +1327,7 @@ func productionSchema(output bool) map[string]any {
 		"matrix_ids":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Matrix (матрица) UUIDs, taken from a prior call with group_by=[\"matrix\"] — there is no separate resolver."},
 		"composition_type_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Composition type UUIDs, taken from a prior call with group_by=[\"composition_type\"]."},
 		"production_group_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Production group UUIDs, taken from a prior call with group_by=[\"production_group\"]."},
-		"firm_ids":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Firm (UA/PL legal entity) UUIDs, taken from a prior call with group_by=[\"firm\"]."},
+		"firm_ids":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Firm (legal entity) UUIDs from resolve_firm. Omitting the filter means all firms the key is allowed to see."},
 	}
 
 	if output {
