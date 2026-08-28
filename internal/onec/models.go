@@ -107,10 +107,19 @@ type CodeLabel struct {
 }
 
 type ProductCandidate struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Code     string `json:"code,omitempty"`
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Code  string `json:"code,omitempty"`
+	// Unit — базовая единица измерения (БазоваяЕдиницаИзмерения). В ней выражены остатки
+	// и доступность, поэтому число из stock_balance без неё нечитаемо. omitempty — как
+	// у MaterialCandidate: старые сборки 1С поле не отдают.
+	Unit     string `json:"unit,omitempty"`
 	Archived bool   `json:"archived"`
+	// IsGroup — позиция является группой справочника (реквизит ЭтоГруппа), а не товаром.
+	// В выдаче появляется только при include_groups=true, но отдаётся всегда: без него
+	// группу не отличить от товара, а её id ведёт себя иначе — в фильтрах отчётов он
+	// раскрывается через IN HIERARCHY. omitempty не ставим: false — значимый ответ.
+	IsGroup bool `json:"is_group"`
 	// Статусные атрибуты жизненного цикла позиции (Category Watchdog). Вычисляются на стороне
 	// 1С из реквизитов карточки; здесь только сквозной проброс. omitempty — старые сборки 1С
 	// их не отдают. Коды синхронны с хелперами CommonModules/MCP (BSL): ProductStatusInfo,

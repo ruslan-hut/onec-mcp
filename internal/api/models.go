@@ -32,7 +32,9 @@ type ProductCandidate struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
 	Code     string `json:"code,omitempty"`
+	Unit     string `json:"unit,omitempty"`
 	Archived bool   `json:"archived"`
+	IsGroup  bool   `json:"is_group"`
 }
 
 type ResolveProductResponse struct {

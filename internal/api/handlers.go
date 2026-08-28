@@ -190,7 +190,9 @@ func (h *Handler) ResolveProduct(w http.ResponseWriter, r *http.Request) {
 			ID:       c.ID,
 			Label:    c.Label,
 			Code:     c.Code,
+			Unit:     c.Unit,
 			Archived: c.Archived,
+			IsGroup:  c.IsGroup,
 		}
 	}
 

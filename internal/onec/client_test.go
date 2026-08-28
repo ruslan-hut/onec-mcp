@@ -258,3 +258,44 @@ func TestResolveFirmCacheIsAccountSeparated(t *testing.T) {
 		t.Errorf("hits = %d, want 3 — легаси-вызов не должен брать выдачу учётки из кэша", got)
 	}
 }
+
+// TestResolveProductPreservesUnitAndIsGroup — регрессия на молчаливую потерю полей:
+// 1С отдаёт по товару unit (БазоваяЕдиницаИзмерения) и is_group (ЭтоГруппа), а в
+// ProductCandidate их не было — json.Unmarshal такие ключи отбрасывает без ошибки,
+// и до клиента доезжал остаток без единицы измерения и группа, неотличимая от товара.
+func TestResolveProductPreservesUnitAndIsGroup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Тело ровно в том виде, в каком его отдаёт HTTPСервис MCP в УПП.
+		_, _ = w.Write([]byte(`{"candidates":[
+			{"id":"c9d79917-3c58-11f0-9239-ff8ad1dc3670","label":"ДСП лам. Kronospan","code":"151923","unit":"м2","archived":false,"is_group":false},
+			{"id":"fbe8db76-2d74-11eb-91e1-f1e24ef7375a","label":"Матеріали","code":"00000011879","unit":"","archived":false,"is_group":true}
+		]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(Settings{
+		BaseURL:       srv.URL,
+		Timeout:       5 * time.Second,
+		ReportTimeout: 5 * time.Second,
+	}, testLogger())
+	defer client.Close()
+
+	resp, err := client.ResolveProduct(context.Background(), "ДСП", 10, true)
+	if err != nil {
+		t.Fatalf("ResolveProduct: %v", err)
+	}
+	if len(resp.Candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(resp.Candidates))
+	}
+
+	if got := resp.Candidates[0].Unit; got != "м2" {
+		t.Errorf("Unit = %q, want %q — единица измерения потерялась при разборе", got, "м2")
+	}
+	if resp.Candidates[0].IsGroup {
+		t.Error("IsGroup = true для товара, want false")
+	}
+	if !resp.Candidates[1].IsGroup {
+		t.Error("IsGroup = false для группы каталога, want true — группу не отличить от товара")
+	}
+}
