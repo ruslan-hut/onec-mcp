@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -188,6 +189,24 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 				IsError: true,
 			})
 		}
+	}
+
+	// Неизвестный ключ в filters — ошибка, а не пустое место. Раньше такой ключ доходил
+	// до разбора тела и молча отбрасывался (в Go неизвестные поля JSON игнорируются):
+	// агент просил sales_report с product_ids, получал выборку по всей базе и читал её
+	// как выборку по одному SKU. Тихо проигнорированный фильтр опаснее отказа — цифры
+	// выглядят правдоподобно, и подмену никто не замечает.
+	if unknown, allowed := unknownFilterKeys(params.Name, params.Arguments); len(unknown) > 0 {
+		h.logger.Warn("tool.filters.unknown",
+			"tool", params.Name, "keys", unknown)
+		h.auditToolCall(auth, params.Name, false, "unknown_filter", started)
+		return NewResponse(req.ID, &CallToolResult{
+			Content: []ContentBlock{TextContent(
+				fmt.Sprintf("unsupported filter %v for tool %q; supported filters: %v",
+					unknown, params.Name, allowed),
+			)},
+			IsError: true,
+		})
 	}
 
 	var result *CallToolResult
@@ -1154,6 +1173,78 @@ func clampDepth(depth flexInt) int {
 // costMeasuresIn возвращает запрошенные меры, закрытые правом mcp:report:cost.
 // Аргументы разбираются как есть (map от json.Unmarshal), с поправкой на двойное кодирование:
 // measures может приехать строкой "[\"profit\"]" — тогда его развернёт unstringifyJSON.
+// unknownFilterKeys сверяет ключи filters в теле вызова со схемой инструмента и
+// возвращает те, которых схема не объявляет, вместе со списком поддержанных.
+// Источник истины — та же InputSchema, что уходит клиенту в tools/list, поэтому
+// проверка не может разойтись с объявленным контрактом.
+func unknownFilterKeys(tool string, args any) ([]string, []string) {
+	m, ok := unstringifyJSON(args).(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+
+	filters, ok := m["filters"].(map[string]any)
+	if !ok || len(filters) == 0 {
+		return nil, nil
+	}
+
+	declared := filterProperties(tool)
+	if declared == nil {
+		// Инструмент фильтров не объявляет вовсе — сверять не с чем, пропускаем.
+		return nil, nil
+	}
+
+	allowed := make([]string, 0, len(declared))
+	for name := range declared {
+		allowed = append(allowed, name)
+	}
+	sort.Strings(allowed)
+
+	var unknown []string
+	for name := range filters {
+		if _, ok := declared[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+
+	return unknown, allowed
+}
+
+// filterProperties достаёт properties объекта filters из схемы инструмента.
+// nil означает "инструмент фильтров не объявляет", пустая карта — "объявляет пустой набор".
+func filterProperties(tool string) map[string]any {
+	for _, t := range GetTools() {
+		if t.Name != tool {
+			continue
+		}
+
+		schema, ok := t.InputSchema.(map[string]any)
+		if !ok {
+			return nil
+		}
+
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			return nil
+		}
+
+		filters, ok := props["filters"].(map[string]any)
+		if !ok {
+			return nil
+		}
+
+		declared, ok := filters["properties"].(map[string]any)
+		if !ok {
+			return nil
+		}
+
+		return declared
+	}
+
+	return nil
+}
+
 func costMeasuresIn(args any) []string {
 	m, ok := unstringifyJSON(args).(map[string]any)
 	if !ok {

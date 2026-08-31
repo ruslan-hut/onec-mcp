@@ -172,7 +172,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolResolveProduct,
-			Description: "Search products by name or code (артикул). Returns a list of matching candidates for disambiguation, each with id, label, code (артикул) and unit (the base unit of measure that stock_balance and availability_report quantities are expressed in). Pass a UUID directly to look up a known product. Set include_groups=true to also search the product catalog GROUPS (товарные группы) — UUIDs of groups can be passed to stock_balance.filters.product_ids or sales_report (via top_products) and will be applied via IN HIERARCHY (matches all products within the group); check is_group on each candidate to tell a group apart from a single product before using its id. Each candidate also carries lifecycle fields: status {code,label} (new|active|phasing_out|excluded), status_changed_at (date), markets ([UA|EU|OTHER]) and eu_certification {code,label} (certified|in_process|not_required) — use them to tell an expected sales drop (product being phased out / withdrawn from a market) from an anomaly worth investigating.",
+			Description: "Search products by name or code (артикул). Returns a list of matching candidates for disambiguation, each with id, label, code (артикул) and unit (the base unit of measure that stock_balance and availability_report quantities are expressed in). Pass a UUID directly to look up a known product. Set include_groups=true to also search the product catalog GROUPS (товарные группы) — UUIDs of groups can be passed to stock_balance.filters.product_ids, sales_report.filters.product_ids or top_products.filters.product_ids and will be applied via IN HIERARCHY (matches all products within the group); check is_group on each candidate to tell a group apart from a single product before using its id. Each candidate also carries lifecycle fields: status {code,label} (new|active|phasing_out|excluded), status_changed_at (date), markets ([UA|EU|OTHER]) and eu_certification {code,label} (certified|in_process|not_required) — use them to tell an expected sales drop (product being phased out / withdrawn from a market) from an anomaly worth investigating.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -250,7 +250,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolSalesReport,
-			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), warehouse_ids, firm_ids (from resolve_firm), sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, firm, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer), and — for users with the mcp:report:cost permission — cost (purchase cost), profit (amount - cost), margin (profit / amount, percent). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, warehouses, sales_channels, customer_cohort, new_since). Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
+			Description: "Get sales report from the «РеализацияТоваров» register for a specified period. By default groups by warehouse and customer and returns amount and qty. Filters: customer_ids (accepts both leaf customer UUIDs and customer-group UUIDs — applied via IN HIERARCHY), product_ids (leaf or product-group UUIDs, also IN HIERARCHY — use it to report on one SKU), warehouse_ids, firm_ids (from resolve_firm), sales_channel_ids (accepts both leaf channel UUIDs and parent-node UUIDs like 'B2B'/'B2C' — applied via IN HIERARCHY, captures all descendants), customer_cohort ('new' | 'returning'). Dimensions (group_by): warehouse, customer, product, seller, sales_channel, firm, day, week, month, cohort, product_group, customer_group (cohort = 'new'/'returning'; day/week/month return ISO date strings 'YYYY-MM-DD'; product_group / customer_group aggregate by parent group of the hierarchical catalog — товарная группа / группа контрагентов). Measures: amount, qty, receipts (number of sales documents), avg_check (amount / receipts), customers (COUNT DISTINCT customer), and — for users with the mcp:report:cost permission — cost (purchase cost), profit (amount - cost), margin (profit / amount, percent). customer_cohort='new'|'returning' restricts the sample (new = customer ДатаСоздания within the calendar month preceding the period start). To compare new vs returning side-by-side use group_by=['cohort'] instead of the cohort filter. Reference cells in rows come back as {id,label} objects (no extra resolve call needed). Response also includes period {from,to} and applied_filters (customers, products, warehouses, sales_channels, customer_cohort, new_since) — check it to confirm a filter was actually applied. Use group_by to pick dimensions, measures to pick metrics, top to limit rows, and sort to order results. sort.field must be one of the selected group_by dimensions or measures (otherwise the entry is ignored).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -272,8 +272,9 @@ func GetTools() []Tool {
 						"required": []string{"from", "to"},
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -289,6 +290,11 @@ func GetTools() []Tool {
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
 								"description": "Filter by warehouse IDs (from resolve_warehouse)",
+							},
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product). Accepts both leaf product UUIDs and product-group UUIDs (resolve_product with include_groups=true) — applied as IN HIERARCHY, so passing a group matches all products within it. Use this to analyse a single SKU over time (group_by ['month']) instead of scanning a full product ranking.",
 							},
 							"sales_channel_ids": map[string]any{
 								"type":        "array",
@@ -338,7 +344,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolTopProducts,
-			Description: "Get top-N best-selling products for a period. Thin wrapper over sales_report grouped by product and sorted by the selected metric. Use this instead of sales_report when the user asks 'top products', 'bestsellers', 'what sold most' — the tool name is a strong hint for LLM tool selection.",
+			Description: "Get top-N best-selling products for a period. Thin wrapper over sales_report grouped by product and sorted by the selected metric. filters.product_ids narrows the ranking to a product group (IN HIERARCHY). Use this instead of sales_report when the user asks 'top products', 'bestsellers', 'what sold most' — the tool name is a strong hint for LLM tool selection.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -352,8 +358,9 @@ func GetTools() []Tool {
 						"required": []string{"from", "to"},
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -362,6 +369,7 @@ func GetTools() []Tool {
 							},
 							"customer_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific customers"},
 							"warehouse_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific warehouses"},
+							"product_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict to specific products or product groups (from resolve_product; applied as IN HIERARCHY). Pass a group UUID to rank products inside one товарная группа."},
 						},
 					},
 					"by": map[string]any{
@@ -416,8 +424,9 @@ func GetTools() []Tool {
 						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -485,8 +494,9 @@ func GetTools() []Tool {
 						"required": []string{"from", "to"},
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -604,8 +614,9 @@ func GetTools() []Tool {
 						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -663,8 +674,9 @@ func GetTools() []Tool {
 						"required": []string{"from", "to"},
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"firm_ids": map[string]any{
 								"type":        "array",
@@ -734,8 +746,9 @@ func GetTools() []Tool {
 						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"customer_ids": map[string]any{
 								"type":        "array",
@@ -789,8 +802,9 @@ func GetTools() []Tool {
 						"description": "Balance date (YYYY-MM-DD). Defaults to current moment.",
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"supplier_ids": map[string]any{
 								"type":        "array",
@@ -848,8 +862,9 @@ func GetTools() []Tool {
 						"required": []string{"from", "to"},
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"supplier_ids": map[string]any{
 								"type":        "array",
@@ -921,8 +936,9 @@ func GetTools() []Tool {
 						"description": "Balance date (YYYY-MM-DD). Defaults to the current moment.",
 					},
 					"filters": map[string]any{
-						"type":        "object",
-						"description": "Optional filters",
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
 						"properties": map[string]any{
 							"product_ids": map[string]any{
 								"type":        "array",
@@ -1367,9 +1383,10 @@ func productionSchema(output bool) map[string]any {
 				"description": "Which production operations to count (default: assembly). 'all' mixes assembly and disassembly — group_by ['operation'] to keep them apart.",
 			},
 			"filters": map[string]any{
-				"type":        "object",
-				"description": "Optional filters",
-				"properties":  filters,
+				"type":                 "object",
+				"description":          "Optional filters",
+				"additionalProperties": false,
+				"properties":           filters,
 			},
 			"group_by": map[string]any{
 				"type":        "array",

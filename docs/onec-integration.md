@@ -45,6 +45,45 @@ as-is, so fields can be added on the 1C side without touching Go:
 See `api.md` for the argument reference; the 1C side lives in `CommonModules/MCP` (region
 `Production`).
 
+## Filters: never ignore one silently
+
+A filter the gate forwards must be either **applied** or **rejected with 400**. Silently
+ignoring an unsupported key is the one outcome that must not happen: 1C returns numbers for
+the whole database, the agent believes the sample was narrowed, and nothing in the response
+reveals the substitution. A refusal costs one retry; a silently ignored filter is a wrong
+answer that looks right.
+
+This is not hypothetical. `sales_report` accepted `product_ids` in the body for months —
+the key passed schema validation, was dropped when the gate decoded the request into its
+typed filter struct, never reached 1C, and every "sales of this SKU" question was answered
+with company-wide totals.
+
+Two rules follow, one per side:
+
+**Gate side.** Every `filters` object in a tool schema is closed
+(`additionalProperties: false`), and `handleToolsCall` rejects a call whose `filters`
+carries a key the tool's own `InputSchema` does not declare, naming the offending and the
+supported keys. The schema sent in `tools/list` is the single source of truth, so the check
+cannot drift from the advertised contract.
+
+**1C side.** Whatever the gate declares for a report, the base must handle:
+
+- implement the filter, or
+- answer 400 explaining why this database cannot support it.
+
+`product_status` in УПП is the model case for the second branch: the item catalog has no
+lifecycle attribute there, so the report answers
+`product_status is not supported: Номенклатура has no lifecycle status in this database`
+instead of quietly returning unfiltered rows.
+
+A filter whose ids resolve to nothing deserves the same treatment — see
+`product_ids: no existing product resolved`. An empty filter set is not "no filter": a typo
+in a UUID would otherwise return the full database as an honest-looking zero-filtered answer.
+
+Echo what you applied. Every report response carries `applied_filters` with one key per
+supported filter; the reader confirms the sample was narrowed by looking there, so a missing
+key is itself a signal.
+
 ## Firms (multi-company) and the `X-MCP-Sub` header
 
 A **firm** is the legal entity a document is issued by: `Справочник.Фирмы` in rior-cf,
@@ -314,6 +353,7 @@ Content-Type: application/json
   },
   "filters": {
     "customer_ids": ["e5d7a8b2-1234-5678-9abc-def012345678"],
+    "product_ids": ["p1q2r3s4-5678-90ab-cdef-123456789012"],
     "warehouse_ids": ["a1b2c3d4-5678-90ab-cdef-123456789012"]
   },
   "group_by": ["warehouse", "customer"],
@@ -329,7 +369,8 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | `period.from` | string | Yes | Start date (YYYY-MM-DD) |
 | `period.to` | string | Yes | End date (YYYY-MM-DD) |
-| `filters.customer_ids` | array | No | Filter by customer GUIDs |
+| `filters.customer_ids` | array | No | Filter by customer GUIDs. Leaf or group UUID — apply via `IN HIERARCHY` so a group matches everyone inside it. |
+| `filters.product_ids` | array | No | Filter by product GUIDs. Leaf or product-group UUID, also `IN HIERARCHY`. This is what answers "sales of one SKU over time" — without it the report can only rank products, never restrict to one. |
 | `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
 | `filters.firm_ids` | array | No | Filter by firm GUIDs (from `/mcp/resolve/firm`). Absent = all firms the key may see — see the firms section above. |
 | `group_by` | array | No | Grouping dimensions |
@@ -392,6 +433,9 @@ Content-Type: application/json
 - If `measures` is empty, include all available measures
 - Apply `top` limit after sorting
 - `totals` should contain sums for numeric measures
+- Echo the applied filters in `applied_filters` — one key per supported filter
+  (`customers`, `products`, `warehouses`, `firms`, …), each an array of `{id, label}`.
+  This is how the caller tells a narrowed sample from a full one; see the filters section above
 
 ---
 

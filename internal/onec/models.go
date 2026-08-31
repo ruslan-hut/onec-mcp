@@ -185,6 +185,15 @@ func (p *Period) UnmarshalJSON(data []byte) error {
 type SalesFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// ProductIDs — UUID номенклатуры из resolve_product. Применяется через IN HIERARCHY,
+	// поэтому принимает и лист, и UUID товарной группы (include_groups=true).
+	//
+	// Поля долго не было, хотя описание resolve_product уже отсылало к отбору продаж по
+	// товару. Ключ product_ids в теле проходил валидацию схемы (additionalProperties
+	// тогда не запрещал лишние ключи) и отбрасывался здесь при разборе — до 1С не
+	// доходил вовсе. Агент получал выборку по всей базе и читал её как выборку по одному
+	// SKU. Ср. тот же класс дефекта в комментарии к CashFilters.
+	ProductIDs []string `json:"product_ids,omitempty"`
 	// SalesChannelIDs — UUIDs элементов справочника SalesChannel. Применяется через IN HIERARCHY,
 	// поэтому можно передать как родительский узел (B2B) для агрегата по всем дочерним каналам,
 	// так и конкретный лист (B2B Online).
@@ -439,6 +448,9 @@ type CashReportResponse struct {
 type TopProductsFilters struct {
 	CustomerIDs  []string `json:"customer_ids,omitempty"`
 	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	// ProductIDs — как в SalesFilters. Осмысленно прежде всего с UUID товарной группы:
+	// «топ внутри группы» — это топ товаров с отбором по её иерархии.
+	ProductIDs []string `json:"product_ids,omitempty"`
 	// FirmIDs — фильтр по фирмам (юрлицам) из resolve_firm. В многофирменных базах (УПП)
 	// набор доступных фирм дополнительно ограничен правами учётной записи на стороне 1С:
 	// пустой фильтр = все разрешённые ключу фирмы, а не все фирмы базы.

@@ -141,97 +141,116 @@ func resultText(t *testing.T, res CallToolResult) string {
 	return res.Content[0].Text
 }
 
-// cash_balance умеет фильтровать только по кассам. Ключи cash_flow (operation_ids и прочие)
-// не должны доезжать до 1С: та их не применит, и агент получит полную выборку, считая её
-// отфильтрованной.
-func TestCashBalanceForwardsOnlyCashFilter(t *testing.T) {
-	h, fake := newTestHandler(t)
-
-	callTool(t, h, ToolCashBalance, map[string]any{
-		"filters": map[string]any{
-			"cash_ids":         []string{"cash-1"},
-			"operation_ids":    []string{"op-1"},
-			"cost_article_ids": []string{"art-1"},
-			"customer_ids":     []string{"cust-1"},
+// Фильтр, которого у инструмента нет, — ошибка вызова, а не пустое место. Тихо
+// отброшенный ключ опаснее отказа: 1С вернула бы полную выборку, а агент прочитал бы её
+// как отфильтрованную и не заметил подмены.
+func TestUnknownFilterKeyIsRejected(t *testing.T) {
+	cases := []struct {
+		name    string
+		tool    string
+		args    map[string]any
+		unknown []string
+	}{
+		{
+			// cash_balance умеет фильтровать только по кассам и фирмам.
+			name: "cash_balance rejects cash_flow keys",
+			tool: ToolCashBalance,
+			args: map[string]any{
+				"filters": map[string]any{
+					"cash_ids":         []string{"cash-1"},
+					"operation_ids":    []string{"op-1"},
+					"cost_article_ids": []string{"art-1"},
+					"customer_ids":     []string{"cust-1"},
+				},
+			},
+			unknown: []string{"cost_article_ids", "customer_ids", "operation_ids"},
 		},
-	})
-
-	got := fake.recorded(t, 0)
-	if got.path != "/mcp/reports/cash_balance" {
-		t.Fatalf("path = %s", got.path)
+		{
+			// receivables объявляет customer_ids, payables — supplier_ids.
+			name: "receivables rejects supplier_ids",
+			tool: ToolReceivablesBalance,
+			args: map[string]any{
+				"filters": map[string]any{
+					"customer_ids": []string{"cust-1"},
+					"supplier_ids": []string{"sup-1"},
+				},
+			},
+			unknown: []string{"supplier_ids"},
+		},
+		{
+			name: "payables rejects customer_ids",
+			tool: ToolPayablesBalance,
+			args: map[string]any{
+				"filters": map[string]any{
+					"customer_ids": []string{"cust-1"},
+					"supplier_ids": []string{"sup-1"},
+				},
+			},
+			unknown: []string{"customer_ids"},
+		},
+		{
+			// top_products — обёртка над sales-отчётом, но канал, когорту и статус ЖЦ
+			// в схеме не объявляет.
+			name: "top_products rejects sales-only keys",
+			tool: ToolTopProducts,
+			args: map[string]any{
+				"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
+				"filters": map[string]any{
+					"customer_ids":      []string{"cust-1"},
+					"sales_channel_ids": []string{"chan-1"},
+					"customer_cohort":   "new",
+					"product_status":    []string{"active"},
+				},
+			},
+			unknown: []string{"customer_cohort", "product_status", "sales_channel_ids"},
+		},
 	}
 
-	filters, ok := got.body["filters"].(map[string]any)
-	if !ok {
-		t.Fatalf("filters missing in %v", got.body)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, fake := newTestHandler(t)
 
-	if _, ok := filters["cash_ids"]; !ok {
-		t.Error("cash_ids must be forwarded")
-	}
-	for _, key := range []string{"operation_ids", "cost_article_ids", "customer_ids"} {
-		if _, leaked := filters[key]; leaked {
-			t.Errorf("%s must not reach 1C from cash_balance", key)
-		}
+			res := callTool(t, h, tc.tool, tc.args)
+
+			if !res.IsError {
+				t.Fatal("call with an unsupported filter must fail")
+			}
+
+			text := resultText(t, res)
+			for _, key := range tc.unknown {
+				if !strings.Contains(text, key) {
+					t.Errorf("error must name the unsupported key %q, got: %s", key, text)
+				}
+			}
+
+			if n := fake.count(); n != 0 {
+				t.Errorf("1C got %d requests, wanted none: the call must not reach it", n)
+			}
+		})
 	}
 }
 
-// receivables объявляет customer_ids, payables — supplier_ids. Ключ чужой роли не forwardится.
-func TestSettlementsFiltersAreRoleSpecific(t *testing.T) {
+// Поддержанные ключи по-прежнему доезжают до 1С — проверка неизвестных ключей не должна
+// задевать нормальный вызов.
+func TestKnownFiltersReach1C(t *testing.T) {
 	h, fake := newTestHandler(t)
 
-	callTool(t, h, ToolReceivablesBalance, map[string]any{
-		"filters": map[string]any{
-			"customer_ids": []string{"cust-1"},
-			"supplier_ids": []string{"sup-1"},
-		},
-	})
-
-	filters := fake.recorded(t, 0).body["filters"].(map[string]any)
-	if _, ok := filters["customer_ids"]; !ok {
-		t.Error("receivables must forward customer_ids")
-	}
-	if _, leaked := filters["supplier_ids"]; leaked {
-		t.Error("receivables must not forward supplier_ids")
-	}
-
-	callTool(t, h, ToolPayablesBalance, map[string]any{
-		"filters": map[string]any{
-			"customer_ids": []string{"cust-1"},
-			"supplier_ids": []string{"sup-1"},
-		},
-	})
-
-	filters = fake.recorded(t, 1).body["filters"].(map[string]any)
-	if _, ok := filters["supplier_ids"]; !ok {
-		t.Error("payables must forward supplier_ids")
-	}
-	if _, leaked := filters["customer_ids"]; leaked {
-		t.Error("payables must not forward customer_ids")
-	}
-}
-
-// top_products — обёртка над sales-отчётом, но в схеме объявляет только контрагентов и склады.
-func TestTopProductsDropsSalesOnlyFilters(t *testing.T) {
-	h, fake := newTestHandler(t)
-
-	callTool(t, h, ToolTopProducts, map[string]any{
+	callTool(t, h, ToolSalesReport, map[string]any{
 		"period": map[string]any{"from": "2026-01-01", "to": "2026-01-31"},
 		"filters": map[string]any{
-			"customer_ids":      []string{"cust-1"},
-			"sales_channel_ids": []string{"chan-1"},
-			"customer_cohort":   "new",
-			"product_status":    []string{"active"},
+			"customer_ids": []string{"cust-1"},
+			"product_ids":  []string{"prod-1"},
 		},
 	})
 
-	filters := fake.recorded(t, 0).body["filters"].(map[string]any)
-	if _, ok := filters["customer_ids"]; !ok {
-		t.Error("customer_ids must be forwarded")
+	filters, ok := fake.recorded(t, 0).body["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("filters missing in %v", fake.recorded(t, 0).body)
 	}
-	for _, key := range []string{"sales_channel_ids", "customer_cohort", "product_status"} {
-		if _, leaked := filters[key]; leaked {
-			t.Errorf("%s must not reach 1C from top_products", key)
+
+	for _, key := range []string{"customer_ids", "product_ids"} {
+		if _, ok := filters[key]; !ok {
+			t.Errorf("%s must be forwarded to 1C", key)
 		}
 	}
 }

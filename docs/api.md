@@ -228,6 +228,7 @@ Content-Type: application/json
   },
   "filters": {
     "customer_ids": ["GUID-1"],
+    "product_ids": ["P-GUID-1"],
     "warehouse_ids": ["W-GUID-1"]
   },
   "group_by": ["warehouse"],
@@ -241,7 +242,8 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | `period.from` | string | Yes | Start date (YYYY-MM-DD) |
 | `period.to` | string | Yes | End date (YYYY-MM-DD) |
-| `filters.customer_ids` | array | No | Filter by customer GUIDs |
+| `filters.customer_ids` | array | No | Filter by customer GUIDs (leaf or group — IN HIERARCHY) |
+| `filters.product_ids` | array | No | Filter by product GUIDs (leaf or product group — IN HIERARCHY). Use it to report on a single SKU. |
 | `filters.warehouse_ids` | array | No | Filter by warehouse GUIDs |
 | `group_by` | array | No | Grouping: `customer`, `warehouse` |
 | `measures` | array | No | Measures: `amount`, `qty` |
@@ -959,6 +961,22 @@ Resolve a document to its UUID so it can be audited via `object_history`.
 | 400 | `validation_error` | Missing required fields or invalid values |
 | 400 | `limit_exceeded` | Result exceeds max_rows limit |
 | 400 / 401 / 502 | `onec_error` | 1C backend request failed — status is taken from 1C (400/401), otherwise 502. The `message` field mirrors 1C's `message` when the body is a structured `{error, message}` JSON. |
+
+### Unsupported filter keys
+
+A `filters` object is closed: every tool schema declares `additionalProperties: false`, and a
+call carrying a key the tool does not declare is refused before it reaches 1C. The result is
+an `isError` tool result naming both the offending and the supported keys:
+
+```
+unsupported filter [product_status sales_channel_ids] for tool "top_products";
+supported filters: [customer_ids firm_ids product_ids warehouse_ids]
+```
+
+The refusal is deliberate. A key that is accepted and then dropped costs nothing to send and
+everything to trust: 1C returns rows for the whole database, and the caller reads them as a
+filtered sample with no way to tell the difference. Check `applied_filters` in a report
+response to confirm which filters were actually applied.
 
 ### JSON-RPC Errors
 
