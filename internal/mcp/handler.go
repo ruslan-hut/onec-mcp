@@ -137,6 +137,11 @@ func (h *Handler) handleToolsList(r *http.Request, req Request) *Response {
 		}
 	}
 
+	// Профиль базы правится последним: скоупы решают, что пользователю ВООБЩЕ положено,
+	// профиль — что из положенного эта база умеет. Порядок важен, иначе профиль тратил бы
+	// работу на инструменты, которые всё равно будут отфильтрованы правами.
+	tools = applyProfile(tools, h.onecClient.Capabilities(r.Context()))
+
 	sub, cid := authIdentity(auth)
 	h.logger.Info("mcp.tool.list", "sub", sub, "client_id", cid, "count", len(tools))
 

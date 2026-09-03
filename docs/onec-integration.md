@@ -507,6 +507,63 @@ infobase user does **not** need the "event log" administrative right.
 
 ---
 
+## Endpoint: Health & capabilities profile
+
+```
+GET {base_url}/mcp/health
+```
+
+Liveness plus — optionally — the **capabilities profile**: a machine-readable description of
+how this particular database differs from the common contract. The gate reads it and edits
+tool schemas before showing them to the model.
+
+Why the profile lives in 1C and not in the tenant record: the differences are produced by the
+accounting model of the database, and the code that relies on that model is the code that
+knows about them. A list kept in the gate's settings would silently go stale on every change
+made on the 1C side.
+
+```json
+{
+  "status": "ok",
+  "time": "2026-09-03T10:00:00",
+  "capabilities": {
+    "profile": "upp-1.3",
+    "version": 1,
+    "unsupported": {
+      "cash_flow": { "filters": ["cost_article_ids"] },
+      "stock_balance": { "filters": ["firm_ids", "product_status"], "group_by": ["firm"] },
+      "specification_explode": { "params": ["matrix_id", "composition_type_id"] }
+    },
+    "extra": {
+      "production_consumption": { "group_by": ["cost_article"] }
+    },
+    "tools": { "unavailable": ["availability_report", "goods_in_transit"] },
+    "resolvers": { "always_empty": ["sales_channel", "material"] }
+  }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `profile` | Human-readable database identifier; logging only. |
+| `version` | Version of the profile **structure**, not its contents. A version the gate does not know is ignored whole — applying it half-way is worse than not applying it. |
+| `unsupported.<tool>` | Facets to remove from that tool's schema: `params`, `filters`, `group_by`, `measures`. Keys are **gate tool names** (`product_specification`), not 1C report types (`specification`). |
+| `extra.<tool>` | Facets to add: things this database supports that the common schema does not declare. A silently hidden capability is the same mistake as a promised missing one, only quieter. |
+| `tools.unavailable` | Tools to drop from `tools/list` entirely. |
+| `resolvers.always_empty` | Entity names whose resolver always returns an empty list here. The tool is **kept** — it works, it just finds nothing — and its description gains a note. |
+
+Both sides must move together: the profile and the 400s in 1C describe the same thing. The
+refusals stay as the last line of defence — the gate may be an older build, or `health` may be
+unreachable — and in that case the call must hit a clear error, not silence.
+
+Gate behaviour is **fail-open**: no profile, an unknown version, or an unreachable 1C all mean
+"show the schemas as before". The profile sharpens the tool surface; it is not an access
+control. Access is held by scopes and by the checks inside 1C. The profile is cached per
+tenant for 5 minutes (`onec.CapabilitiesTTL`), failures included — otherwise every
+`tools/list` against a down 1C would pay a network timeout.
+
+---
+
 ## Endpoint: Event Log
 
 Backs both `event_log` and `object_history` — they POST to the same endpoint; 1C reads

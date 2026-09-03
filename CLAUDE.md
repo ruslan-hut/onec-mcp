@@ -60,6 +60,7 @@ internal/mcp/               MCP protocol layer
 ├── handler.go              JSON-RPC request router, tool dispatcher
 ├── protocol.go             JSON-RPC types (Request, Response, errors)
 ├── jsonrpc.go              Error constructors (-32700, -32600, etc.)
+├── profile.go              Edits tool schemas to the database's capabilities profile
 └── tools.go                Tool definitions with JSON schemas
 
 internal/onec/              1C integration layer
@@ -114,6 +115,26 @@ materials on them — 1C decides this from the `X-MCP-Scopes` header). Anything 
 depends on the caller's scopes must carry that fact in its `resolveCache` key — see
 `costScoped` in `internal/onec/client.go`, otherwise one cost-scoped call poisons the cache for
 everyone else until the TTL expires.
+
+### Capabilities profile
+
+The common contract is wider than any single database: `cash_flow.cost_article_ids` works in
+rior (cost articles sit in the ДДС analytics dimension) and is rejected with a 400 in УПП.
+Without help, the model sees the filter, calls it and burns a turn on an error that reads
+like a breakage.
+
+So 1C publishes a **capabilities profile** in `GET /mcp/health` (format: `docs/onec-integration.md`),
+and `applyProfile` in `internal/mcp/profile.go` edits the schemas before `tools/list` returns
+them: cutting unsupported params / filters / group_by / measures, adding facets the database
+supports beyond the common schema, dropping unavailable tools, and marking resolvers that
+always come back empty. It runs **after** the scope filter — scopes decide what the caller
+may see at all, the profile what of that this database can do.
+
+The profile is authored in 1C on purpose: the differences come from its accounting model, and
+a list kept here would go stale silently. It is cached per tenant for `onec.CapabilitiesTTL`,
+failures included. Everything is fail-open — no profile, unknown version or unreachable 1C
+means the schemas are shown as before. The profile sharpens the tool surface; it is **not**
+access control, which stays with scopes and the checks inside 1C.
 
 Adding a tool means: a constant, a `ToolScopes` entry (a tool missing from the map is rejected as
 unknown), a definition in `GetTools`, a `case` in the dispatch, and the matching branch in the 1C

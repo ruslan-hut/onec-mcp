@@ -708,3 +708,47 @@ type AuthVerifyResponse struct {
 	Name   string   `json:"name"`
 	Scopes []string `json:"scopes"`
 }
+
+// SchemaFacets — грани схемы одного инструмента, которые профиль базы просит вырезать
+// (в unsupported) или добавить (в extra).
+type SchemaFacets struct {
+	Params   []string `json:"params,omitempty"`
+	Filters  []string `json:"filters,omitempty"`
+	GroupBy  []string `json:"group_by,omitempty"`
+	Measures []string `json:"measures,omitempty"`
+}
+
+// Capabilities — профиль возможностей конкретной базы 1С, отдаваемый в /mcp/health.
+//
+// Смысл: общий контракт гейта шире любой отдельной базы. Учётные модели различаются
+// (в rior статьи затрат лежат в аналитике ДДС, в УПП — нет), и без профиля модель видит
+// в схеме фильтр, вызов которого гарантированно упирается в 400. Профиль позволяет
+// вырезать такое из схемы ДО того, как модель его увидит.
+//
+// Профиль формирует сама 1С: расхождения порождает её учётная модель, и знает о них
+// код, который на неё опирается. Список в настройках гейта устаревал бы молча.
+type Capabilities struct {
+	// Profile — человекочитаемый идентификатор базы ("upp-1.3"), только для логов.
+	Profile string `json:"profile"`
+	// Version — версия СТРУКТУРЫ профиля. Незнакомую версию гейт игнорирует целиком,
+	// вместо того чтобы применять её наполовину.
+	Version int `json:"version"`
+	// Unsupported / Extra — по имени инструмента гейта (не типа отчёта 1С).
+	Unsupported map[string]SchemaFacets `json:"unsupported,omitempty"`
+	Extra       map[string]SchemaFacets `json:"extra,omitempty"`
+	Tools       struct {
+		Unavailable []string `json:"unavailable,omitempty"`
+	} `json:"tools"`
+	Resolvers struct {
+		// AlwaysEmpty — имена сущностей (customer, material, …), чей резолвер в этой базе
+		// всегда отвечает пустым списком.
+		AlwaysEmpty []string `json:"always_empty,omitempty"`
+	} `json:"resolvers"`
+}
+
+// HealthResponse — ответ GET /mcp/health на стороне 1С.
+type HealthResponse struct {
+	Status       string        `json:"status"`
+	Time         string        `json:"time"`
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}

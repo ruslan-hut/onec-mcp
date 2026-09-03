@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"example.com/mcp-sales-mvp/internal/oauth"
@@ -43,7 +44,18 @@ type Client struct {
 	defaultTenant    string
 	logger           *slog.Logger
 	resolveCache     *resolveCache
+
+	// Профиль возможностей базы: читается из /mcp/health, живёт CapabilitiesTTL.
+	// Хранится в клиенте, а не глобально, потому что клиент и так создаётся на тенант —
+	// профиль одной базы не может протечь в другую.
+	capsMu     sync.RWMutex
+	caps       *Capabilities
+	capsExpire time.Time
 }
+
+// CapabilitiesVersion — версия структуры профиля, которую понимает этот гейт.
+// Профиль другой версии игнорируется целиком: применять наполовину опаснее, чем не применять.
+const CapabilitiesVersion = 1
 
 func NewClient(s Settings, logger *slog.Logger) *Client {
 	return &Client{
@@ -552,4 +564,52 @@ func (c *Client) VerifyMCPKey(ctx context.Context, key string) (*AuthVerifyRespo
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// CapabilitiesTTL — как долго профиль базы считается свежим. Профиль меняется вместе с
+// кодом интеграции в 1С, то есть редко, а tools/list зовётся на каждую сессию модели —
+// поэтому кэш обязателен, но и протухать он должен без перезапуска гейта.
+const CapabilitiesTTL = 5 * time.Minute
+
+// Capabilities возвращает профиль возможностей базы из GET /mcp/health, с кэшем на
+// CapabilitiesTTL.
+//
+// Fail-open: если 1С недоступна, отдала старый health без профиля или незнакомую версию
+// профиля — возвращается nil, и гейт показывает схемы как раньше. Профиль уточняет выдачу,
+// но не является контролем доступа: границу держат скоупы и проверки в самой 1С.
+func (c *Client) Capabilities(ctx context.Context) *Capabilities {
+	c.capsMu.RLock()
+	caps, fresh := c.caps, time.Now().Before(c.capsExpire)
+	c.capsMu.RUnlock()
+
+	if fresh {
+		return caps
+	}
+
+	var health HealthResponse
+	if err := c.doRequest(ctx, http.MethodGet, "/mcp/health", nil, &health); err != nil {
+		c.logger.Warn("onec.capabilities.failed", "error", err)
+		// Кэшируем и неудачу, иначе каждый tools/list при лежащей 1С добавлял бы к себе
+		// сетевой таймаут.
+		c.storeCapabilities(nil)
+		return nil
+	}
+
+	if health.Capabilities != nil && health.Capabilities.Version != CapabilitiesVersion {
+		c.logger.Warn("onec.capabilities.version_mismatch",
+			"got", health.Capabilities.Version, "want", CapabilitiesVersion)
+		c.storeCapabilities(nil)
+		return nil
+	}
+
+	c.storeCapabilities(health.Capabilities)
+
+	return health.Capabilities
+}
+
+func (c *Client) storeCapabilities(caps *Capabilities) {
+	c.capsMu.Lock()
+	c.caps = caps
+	c.capsExpire = time.Now().Add(CapabilitiesTTL)
+	c.capsMu.Unlock()
 }
