@@ -1,0 +1,129 @@
+{
+  "profile": "upp-1.3",
+  "version": 1,
+  "unsupported": {
+    "sales_report": {
+      "filters": [
+        "sales_channel_ids",
+        "customer_cohort"
+      ],
+      "group_by": [
+        "sales_channel",
+        "cohort"
+      ]
+    },
+    "top_products": {
+      "filters": [
+        "sales_channel_ids",
+        "customer_cohort"
+      ]
+    },
+    "customer_summary": {
+      "filters": [
+        "sales_channel_ids",
+        "customer_cohort"
+      ]
+    },
+    "stock_balance": {
+      "filters": [
+        "firm_ids",
+        "product_status"
+      ],
+      "group_by": [
+        "firm"
+      ]
+    },
+    "cash_flow": {
+      "filters": [
+        "cost_article_ids"
+      ]
+    },
+    "production_output": {
+      "filters": [
+        "warehouse_ids",
+        "firm_ids",
+        "matrix_ids",
+        "composition_type_ids",
+        "employee_ids"
+      ],
+      "params": [
+        "operation_type"
+      ]
+    },
+    "production_consumption": {
+      "filters": [
+        "warehouse_ids",
+        "firm_ids",
+        "matrix_ids",
+        "composition_type_ids",
+        "employee_ids"
+      ],
+      "params": [
+        "operation_type"
+      ]
+    },
+    "product_specification": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    },
+    "specification_cost": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    },
+    "specification_explode": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    },
+    "specification_where_used": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    },
+    "specification_versions": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    },
+    "specification_list": {
+      "params": [
+        "matrix_id",
+        "composition_type_id",
+        "production_group_id"
+      ]
+    }
+  },
+  "extra": {
+    "production_consumption": {
+      "group_by": [
+        "cost_article"
+      ]
+    }
+  },
+  "tools": {
+    "unavailable": [
+      "availability_report",
+      "purchases_report",
+      "goods_in_transit",
+      "product_details"
+    ]
+  },
+  "resolvers": {
+    "always_empty": [
+      "sales_channel",
+      "material"
+    ]
+  }
+}

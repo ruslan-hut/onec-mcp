@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -229,5 +231,90 @@ func TestApplyProfileDoesNotLeakIntoNextCall(t *testing.T) {
 
 	if !hasFilter(t, findTool(t, GetTools(), ToolCashFlow), "cost_article_ids") {
 		t.Error("applyProfile mutated shared schema state: cost_article_ids gone from a fresh GetTools()")
+	}
+}
+
+// Профиль, снятый с живой базы УПП 1.3 (GET /mcp/health). Держим его фикстурой, чтобы
+// расхождение имён между сторонами ловилось тестом, а не поведением в проде: ключи профиля
+// — имена инструментов гейта, и опечатка в 1С (specification вместо product_specification)
+// иначе прошла бы незамеченной — профиль просто ничего бы не вырезал.
+func realUppProfile(t *testing.T) *onec.Capabilities {
+	t.Helper()
+
+	payload, err := os.ReadFile(filepath.Join("testdata", "upp_profile.json"))
+	if err != nil {
+		t.Fatalf("failed to read the profile fixture: %v", err)
+	}
+
+	return capsFromJSON(t, string(payload))
+}
+
+// Каждый ключ профиля должен попадать в существующий инструмент. Ключ, не совпавший ни с
+// чем, — это молчаливая опечатка: гейт не упадёт, просто не сделает того, о чём его просят.
+func TestRealProfileNamesMatchTools(t *testing.T) {
+	caps := realUppProfile(t)
+
+	known := make(map[string]bool)
+	for _, tool := range GetTools() {
+		known[tool.Name] = true
+	}
+
+	for name := range caps.Unsupported {
+		if !known[name] {
+			t.Errorf("unsupported names %q, which is not a tool of this gate", name)
+		}
+	}
+
+	for name := range caps.Extra {
+		if !known[name] {
+			t.Errorf("extra names %q, which is not a tool of this gate", name)
+		}
+	}
+
+	for _, name := range caps.Tools.Unavailable {
+		if !known[name] {
+			t.Errorf("tools.unavailable names %q, which is not a tool of this gate", name)
+		}
+	}
+
+	for _, entity := range caps.Resolvers.AlwaysEmpty {
+		if !known["resolve_"+entity] {
+			t.Errorf("resolvers.always_empty names %q, but resolve_%s does not exist", entity, entity)
+		}
+	}
+}
+
+// Сквозная проверка на реальном профиле: то, что база отклоняет 400-ми, не должно доезжать
+// до модели.
+func TestRealProfileShapesTools(t *testing.T) {
+	tools := applyProfile(GetTools(), realUppProfile(t))
+
+	if hasFilter(t, findTool(t, tools, ToolCashFlow), "cost_article_ids") {
+		t.Error("cash_flow still offers cost_article_ids")
+	}
+
+	if groups := enumOf(t, findTool(t, tools, ToolSalesReport), "group_by"); hasValue(groups, "sales_channel") {
+		t.Errorf("sales_report group_by still offers sales_channel: %v", groups)
+	}
+
+	spec := findTool(t, tools, ToolProductSpecification)
+	if _, found := schemaProperties(spec)["matrix_id"]; found {
+		t.Error("product_specification still offers matrix_id")
+	}
+
+	if groups := enumOf(t, findTool(t, tools, ToolProductionConsumption), "group_by"); !hasValue(groups, "cost_article") {
+		t.Errorf("production_consumption group_by lacks cost_article: %v", groups)
+	}
+
+	for _, name := range []string{ToolAvailabilityReport, ToolPurchasesReport, ToolGoodsInTransit, ToolProductDetails} {
+		for _, tool := range tools {
+			if tool.Name == name {
+				t.Errorf("tool %s is not implemented in this database but is still listed", name)
+			}
+		}
+	}
+
+	if !strings.Contains(findTool(t, tools, ToolResolveMaterial).Description, "always returns an empty list") {
+		t.Error("resolve_material carries no empty-result warning")
 	}
 }
