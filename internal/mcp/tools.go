@@ -47,9 +47,22 @@ const (
 // X-MCP-Scopes (defense in depth).
 const ScopeReportCost = "mcp:report:cost"
 
-// CostMeasures — меры sales_report, закрытые правом ScopeReportCost. Должны быть синхронны
-// с белым списком мер в CommonModules/MCP (BSL) и со значениями enum в схеме sales_report.
-var CostMeasures = []string{"cost", "profit", "margin"}
+// CostMeasures — меры, закрытые правом ScopeReportCost, по инструментам. Должны быть синхронны
+// с белыми списками мер в CommonModules/MCP (BSL) и со значениями enum в схемах ниже.
+//
+// Ключ — инструмент, а не просто имя меры: имя `amount` само по себе о чувствительности ничего
+// не говорит. В sales_report это выручка, в purchases_report — закупочные обороты, открытые
+// money-правом. Закрывать нужно ровно те меры, за которыми стоит СЕБЕСТОИМОСТЬ, а это свойство
+// пары «инструмент + мера», а не имени.
+var CostMeasures = map[string][]string{
+	ToolSalesReport: {"cost", "profit", "margin"},
+	// stock_balance.amount — СуммаBalance регистра остатков, то есть себестоимость партий
+	// (ЦенаПартии × Количество): amount/qty даёт закупочную цену за единицу.
+	ToolStockBalance: {"amount"},
+	// Товары в пути: обе суммы — стоимость поставки от поставщика, та же закупочная цена.
+	// Без этого её читали бы отсюда в обход закрытого stock_balance.amount.
+	ToolGoodsInTransit: {"amount", "amount_in_currency"},
+}
 
 // ToolScopes — обязательный scope для каждого MCP-инструмента.
 // Проверяется в handleToolsCall и используется для фильтрации tools/list по правам пользователя.
@@ -414,7 +427,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolStockBalance,
-			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group, firm), measures to pick metrics (qty, amount), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case. Coverage depends on permissions: by default the report shows goods for sale on trading warehouses only. With the mcp:report:cost permission it also covers the production side — raw materials and components (see resolve_material) on production warehouses (see resolve_warehouse.for_production).",
+			Description: "Get product stock balance from the «ОстаткиТоваров» register as of a given date. By default groups by both warehouse and product and returns the qty measure. Use group_by to pick dimensions (warehouse, product, product_group, firm), measures to pick metrics (qty, amount, and — where this database offers them — min_qty, rec_qty, reserved_qty, free_qty), top to limit rows, and sort to order (sort.field must be one of the selected group_by dimensions or measures). Use product_group to aggregate by parent group of the hierarchical product catalog (товарная группа), useful for answering questions about totals per group rather than per item. Do not combine product with product_group — the group column would be fully determined by the leaf; the server silently drops the redundant product_group in that case. amount is the stock valued at PURCHASE COST (себестоимость партий), so it requires the mcp:report:cost permission and is omitted from this enum otherwise. Coverage depends on permissions: by default the report shows goods for sale on trading warehouses only. With the mcp:report:cost permission it also covers the production side — raw materials and components (see resolve_material) on production warehouses (see resolve_warehouse.for_production).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -926,7 +939,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolGoodsInTransit,
-			Description: "Stock that is IN TRANSIT as of a date — paid for or ordered, already booked to the firm, but not yet accepted at the warehouse. It lives in a separate 1C register («ОстаткиТоваровВПути»), which is why none of it shows up in stock_balance: a purchase invoice flagged «в пути» posts here instead, and the same document moves the goods into the normal stock register once it is re-posted as arrived. Use it to answer 'what is on its way and when does it land', 'do we need to reorder or is it already coming', and to reconcile a stockout against incoming supply. Dimensions (group_by): warehouse (the destination), product, product_group, firm, status (how far along the delivery is), supplier, document (the source invoice) and delivery_date — the EXPECTED ARRIVAL date (ДатаПоставки from the invoice header; empty means no date was set, not 'no delivery'). Default: warehouse + product. Measures: qty, amount (base currency), amount_in_currency (cost-accounting currency) — default qty + amount; both come pre-converted from the register, no rate juggling. Rows whose balance nets to zero are omitted — those deliveries already arrived. Requires the mcp:report:stock permission; without mcp:report:cost, materials and production warehouses are excluded as everywhere else.",
+			Description: "Stock that is IN TRANSIT as of a date — paid for or ordered, already booked to the firm, but not yet accepted at the warehouse. It lives in a separate 1C register («ОстаткиТоваровВПути»), which is why none of it shows up in stock_balance: a purchase invoice flagged «в пути» posts here instead, and the same document moves the goods into the normal stock register once it is re-posted as arrived. Use it to answer 'what is on its way and when does it land', 'do we need to reorder or is it already coming', and to reconcile a stockout against incoming supply. Dimensions (group_by): warehouse (the destination), product, product_group, firm, status (how far along the delivery is), supplier, document (the source invoice) and delivery_date — the EXPECTED ARRIVAL date (ДатаПоставки from the invoice header; empty means no date was set, not 'no delivery'). Default: warehouse + product. Measures: qty, amount (base currency), amount_in_currency (cost-accounting currency) — both come pre-converted from the register, no rate juggling. Both amounts are what the supplier charges, i.e. purchase cost: they require the mcp:report:cost permission and are omitted from this enum otherwise. Default: qty + amount with that permission, qty alone without it. Rows whose balance nets to zero are omitted — those deliveries already arrived. Requires the mcp:report:stock permission; without mcp:report:cost, materials and production warehouses are excluded as everywhere else.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -385,23 +385,85 @@ func TestAdminCallsUseReportTimeout(t *testing.T) {
 func TestCostMeasuresIn(t *testing.T) {
 	cases := []struct {
 		name string
+		tool string
 		args any
 		want int
 	}{
-		{"no measures", map[string]any{"top": 10}, 0},
-		{"open measures", map[string]any{"measures": []any{"amount", "qty"}}, 0},
-		{"cost measure", map[string]any{"measures": []any{"amount", "profit"}}, 1},
-		{"all cost measures", map[string]any{"measures": []any{"cost", "profit", "margin"}}, 3},
-		{"double-encoded", map[string]any{"measures": `["margin"]`}, 1},
-		{"not a map", []any{"nonsense"}, 0},
+		{"no measures", ToolSalesReport, map[string]any{"top": 10}, 0},
+		{"open measures", ToolSalesReport, map[string]any{"measures": []any{"amount", "qty"}}, 0},
+		{"cost measure", ToolSalesReport, map[string]any{"measures": []any{"amount", "profit"}}, 1},
+		{"all cost measures", ToolSalesReport, map[string]any{"measures": []any{"cost", "profit", "margin"}}, 3},
+		{"double-encoded", ToolSalesReport, map[string]any{"measures": `["margin"]`}, 1},
+		{"not a map", ToolSalesReport, []any{"nonsense"}, 0},
+		// amount закрыт у остатков (себестоимость партий) и открыт у продаж (выручка) —
+		// именно поэтому список закрытых мер привязан к инструменту.
+		{"stock amount is cost", ToolStockBalance, map[string]any{"measures": []any{"qty", "amount"}}, 1},
+		{"stock qty is open", ToolStockBalance, map[string]any{"measures": []any{"qty", "min_qty"}}, 0},
+		{"transit both amounts", ToolGoodsInTransit, map[string]any{"measures": []any{"amount", "amount_in_currency"}}, 2},
+		// закупки закрыты money-правом, и их amount правом на себестоимость не режется
+		{"purchases amount is open", ToolPurchasesReport, map[string]any{"measures": []any{"amount"}}, 0},
+		{"tool without cost measures", ToolCashFlow, map[string]any{"measures": []any{"net"}}, 0},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := costMeasuresIn(tc.args); len(got) != tc.want {
-				t.Errorf("costMeasuresIn(%v) = %v, want %d entries", tc.args, got, tc.want)
+			if got := costMeasuresIn(tc.tool, tc.args); len(got) != tc.want {
+				t.Errorf("costMeasuresIn(%q, %v) = %v, want %d entries", tc.tool, tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+// stripCostMeasures правит enum схемы для ключей без права на себестоимость: закрытые меры
+// должны исчезнуть у каждого инструмента из CostMeasures и остаться у всех прочих.
+func TestStripCostMeasures(t *testing.T) {
+	tools := GetTools()
+	stripCostMeasures(tools)
+
+	measureEnum := func(name string) []string {
+		t.Helper()
+		for _, tool := range tools {
+			if tool.Name != name {
+				continue
+			}
+			schema := tool.InputSchema.(map[string]any)
+			props := schema["properties"].(map[string]any)
+			measures, ok := props["measures"].(map[string]any)
+			if !ok {
+				t.Fatalf("tool %q has no measures", name)
+			}
+			return measures["items"].(map[string]any)["enum"].([]string)
+		}
+		t.Fatalf("tool %q not found", name)
+		return nil
+	}
+
+	has := func(enum []string, want string) bool {
+		for _, v := range enum {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, tc := range []struct {
+		tool    string
+		measure string
+		want    bool
+	}{
+		{ToolSalesReport, "profit", false},
+		{ToolSalesReport, "amount", true}, // выручка остаётся
+		{ToolStockBalance, "amount", false},
+		{ToolStockBalance, "qty", true},
+		{ToolGoodsInTransit, "amount", false},
+		{ToolGoodsInTransit, "amount_in_currency", false},
+		{ToolGoodsInTransit, "qty", true},
+		{ToolPurchasesReport, "amount", true}, // закупки закрыты money-правом, а не этим
+	} {
+		if got := has(measureEnum(tc.tool), tc.measure); got != tc.want {
+			t.Errorf("%s.measures contains %q = %v, want %v", tc.tool, tc.measure, got, tc.want)
+		}
 	}
 }
 

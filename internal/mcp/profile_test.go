@@ -306,7 +306,37 @@ func TestRealProfileShapesTools(t *testing.T) {
 		t.Errorf("production_consumption group_by lacks cost_article: %v", groups)
 	}
 
-	for _, name := range []string{ToolAvailabilityReport, ToolPurchasesReport, ToolGoodsInTransit, ToolProductDetails} {
+	// Закупки в этой базе считаются по регистру, где нет ни склада, ни валюты, ни
+	// признака «в пути», зато есть договор и подразделение.
+	purchases := findTool(t, tools, ToolPurchasesReport)
+
+	if hasFilter(t, purchases, "warehouse_ids") {
+		t.Error("purchases_report still offers warehouse_ids")
+	}
+
+	if _, found := schemaProperties(purchases)["in_transit"]; found {
+		t.Error("purchases_report still offers in_transit")
+	}
+
+	purchaseGroups := enumOf(t, purchases, "group_by")
+
+	for _, gone := range []string{"warehouse", "currency", "in_transit", "delivery_date"} {
+		if hasValue(purchaseGroups, gone) {
+			t.Errorf("purchases_report group_by still offers %s: %v", gone, purchaseGroups)
+		}
+	}
+
+	for _, added := range []string{"contract", "department", "project", "document"} {
+		if !hasValue(purchaseGroups, added) {
+			t.Errorf("purchases_report group_by lacks %s, which this database supports: %v", added, purchaseGroups)
+		}
+	}
+
+	if measures := enumOf(t, purchases, "measures"); hasValue(measures, "amount_currency") {
+		t.Errorf("purchases_report measures still offer amount_currency: %v", measures)
+	}
+
+	for _, name := range []string{ToolAvailabilityReport, ToolGoodsInTransit, ToolProductDetails} {
 		for _, tool := range tools {
 			if tool.Name == name {
 				t.Errorf("tool %s is not implemented in this database but is still listed", name)

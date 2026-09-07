@@ -130,8 +130,9 @@ func (h *Handler) handleToolsList(r *http.Request, req Request) *Response {
 		}
 		tools = filtered
 
-		// Measure-level ACL: без права mcp:report:cost убираем cost/profit/margin из enum мер
-		// sales_report, чтобы LLM их даже не предлагал. Финальная защита — на стороне 1С.
+		// Measure-level ACL: без права mcp:report:cost убираем закрытые им меры из enum схемы
+		// (cost/profit/margin у продаж, суммы себестоимости у остатков и товаров в пути),
+		// чтобы LLM их даже не предлагал. Финальная защита — на стороне 1С.
 		if !auth.HasScope(ScopeReportCost) {
 			stripCostMeasures(tools)
 		}
@@ -183,7 +184,7 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 	// проигнорировавший схему, спокойно просил measures:["profit"]. Единственной защитой оставался
 	// заголовок X-MCP-Scopes на стороне 1С — которого в режиме статического токена вообще нет.
 	if auth != nil && !auth.HasScope(ScopeReportCost) {
-		if blocked := costMeasuresIn(params.Arguments); len(blocked) > 0 {
+		if blocked := costMeasuresIn(params.Name, params.Arguments); len(blocked) > 0 {
 			h.logger.Warn("oauth.scope.denied",
 				"tool", params.Name, "required", ScopeReportCost, "sub", auth.Sub, "measures", blocked)
 			h.auditToolCall(auth, params.Name, false, "scope_denied", started)
@@ -1250,7 +1251,15 @@ func filterProperties(tool string) map[string]any {
 	return nil
 }
 
-func costMeasuresIn(args any) []string {
+// costMeasuresIn возвращает запрошенные меры, закрытые правом ScopeReportCost, для ЭТОГО
+// инструмента. Инструмент — обязательный аргумент: одно и то же имя меры чувствительно в
+// одном отчёте и открыто в другом (см. CostMeasures).
+func costMeasuresIn(tool string, args any) []string {
+	blocked := blockedMeasures(tool)
+	if len(blocked) == 0 {
+		return nil
+	}
+
 	m, ok := unstringifyJSON(args).(map[string]any)
 	if !ok {
 		return nil
@@ -1259,11 +1268,6 @@ func costMeasuresIn(args any) []string {
 	raw, ok := m["measures"].([]any)
 	if !ok {
 		return nil
-	}
-
-	blocked := make(map[string]bool, len(CostMeasures))
-	for _, name := range CostMeasures {
-		blocked[name] = true
 	}
 
 	var found []string
@@ -1277,17 +1281,28 @@ func costMeasuresIn(args any) []string {
 	return found
 }
 
-// stripCostMeasures удаляет cost/profit/margin из enum мер инструмента sales_report.
-// Вызывается для пользователей без права mcp:report:cost. Мутирует вложенные map'ы схемы;
-// это безопасно, т.к. GetTools() конструирует свежие map'ы на каждый запрос.
-func stripCostMeasures(tools []Tool) {
-	blocked := make(map[string]bool, len(CostMeasures))
-	for _, m := range CostMeasures {
-		blocked[m] = true
+func blockedMeasures(tool string) map[string]bool {
+	names, ok := CostMeasures[tool]
+	if !ok {
+		return nil
 	}
 
+	blocked := make(map[string]bool, len(names))
+	for _, name := range names {
+		blocked[name] = true
+	}
+
+	return blocked
+}
+
+// stripCostMeasures удаляет закрытые правом mcp:report:cost меры из enum схемы каждого
+// инструмента, у которого они есть (см. CostMeasures). Вызывается для пользователей без
+// этого права. Мутирует вложенные map'ы схемы; это безопасно, т.к. GetTools() конструирует
+// свежие map'ы на каждый запрос.
+func stripCostMeasures(tools []Tool) {
 	for _, t := range tools {
-		if t.Name != ToolSalesReport {
+		blocked := blockedMeasures(t.Name)
+		if len(blocked) == 0 {
 			continue
 		}
 

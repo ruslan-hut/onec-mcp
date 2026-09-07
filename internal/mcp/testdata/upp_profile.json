@@ -33,6 +33,23 @@
         "firm"
       ]
     },
+    "purchases_report": {
+      "filters": [
+        "warehouse_ids"
+      ],
+      "group_by": [
+        "warehouse",
+        "currency",
+        "in_transit",
+        "delivery_date"
+      ],
+      "measures": [
+        "amount_currency"
+      ],
+      "params": [
+        "in_transit"
+      ]
+    },
     "cash_flow": {
       "filters": [
         "cost_article_ids"
@@ -110,12 +127,19 @@
       "group_by": [
         "cost_article"
       ]
+    },
+    "purchases_report": {
+      "group_by": [
+        "contract",
+        "department",
+        "project",
+        "document"
+      ]
     }
   },
   "tools": {
     "unavailable": [
       "availability_report",
-      "purchases_report",
       "goods_in_transit",
       "product_details"
     ]
