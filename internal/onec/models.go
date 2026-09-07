@@ -608,6 +608,35 @@ func (f *GoodsInTransitFilters) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ReservesFilters — отборы детализации резервов. expires_before фильтрует по СРОКУ
+// резервирования, а не по дате отчёта: у регистра резервов истории нет, он всегда «на сейчас».
+type ReservesFilters struct {
+	ProductIDs    []string `json:"product_ids,omitempty"`
+	WarehouseIDs  []string `json:"warehouse_ids,omitempty"`
+	CustomerIDs   []string `json:"customer_ids,omitempty"`
+	FirmIDs       []string `json:"firm_ids,omitempty"`
+	ExpiresBefore string   `json:"expires_before,omitempty"`
+}
+
+func (f *ReservesFilters) UnmarshalJSON(data []byte) error {
+	type alias ReservesFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = ReservesFilters(a)
+	return nil
+}
+
+// ReservesRequest — у отчёта нет параметра date: регистр хранит текущее состояние.
+type ReservesRequest struct {
+	Filters  ReservesFilters `json:"filters,omitempty"`
+	GroupBy  []string        `json:"group_by,omitempty"`
+	Measures []string        `json:"measures,omitempty"`
+	Top      int             `json:"top,omitempty"`
+	Sort     []SortSpec      `json:"sort,omitempty"`
+}
+
 type GoodsInTransitRequest struct {
 	Date     string                `json:"date,omitempty"`
 	Filters  GoodsInTransitFilters `json:"filters,omitempty"`

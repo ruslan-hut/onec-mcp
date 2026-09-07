@@ -22,6 +22,7 @@ const (
 	ToolPayablesBalance     = "payables_balance"
 	ToolPurchasesReport     = "purchases_report"
 	ToolGoodsInTransit      = "goods_in_transit"
+	ToolStockReserves       = "stock_reserves"
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
@@ -76,7 +77,11 @@ var ToolScopes = map[string]string{
 	ToolStockBalance:       "mcp:report:stock",
 	ToolAvailabilityReport: "mcp:report:stock",
 	// Товары в пути — те же остатки, только в отдельном регистре: право как у stock_balance.
-	ToolGoodsInTransit:      "mcp:report:stock",
+	ToolGoodsInTransit: "mcp:report:stock",
+	// Резервы — та же складская величина (мера reserved_qty у stock_balance), только в разрезе
+	// клиента и документа. Имя контрагента раскрывает и goods_in_transit разрезом supplier,
+	// поэтому отдельного права не заводим.
+	ToolStockReserves:       "mcp:report:stock",
 	ToolTopProducts:         "mcp:report:sales",
 	ToolCustomerSummary:     "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
@@ -997,6 +1002,72 @@ func GetTools() []Tool {
 					"sort": map[string]any{
 						"type":        "array",
 						"description": "Sort order (sort.field must be a selected dimension or measure)",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:        ToolStockReserves,
+			Description: "Reserved stock in detail — WHAT is held, WHERE, FOR WHOM and ON WHICH DOCUMENT. stock_balance answers 'how much is reserved' as a single number (its reserved_qty measure); this tool breaks that number down by customer and by the reserving document. A reservation in this database is a «Расходная накладная» posted with operation type «Резерв»: it holds goods for a customer without shipping them, so the stock is still on hand but not free to sell (see stock_balance.free_qty). Dimensions (group_by): warehouse, product, product_group, customer, firm, document (the reserving invoice), reserved_at (the day the reservation was made) and reserved_until (the day it expires; empty means open-ended). Default: warehouse + product + customer + document — exactly 'who is holding what, where, on which paper'. Measures: qty (reserved quantity) and documents (COUNT DISTINCT of reserving documents; always 1 when grouped by document) — default qty. Use filters.expires_before with today's date to find EXPIRED reservations still holding stock; open-ended reservations are excluded from that filter since they never expire. THE REPORT IS ALWAYS AS OF NOW: the register keeps current state, not history, so there is no date parameter — reserved_at/reserved_until describe the reservations themselves, not a balance date. Rows netting to zero (released reservations) are omitted. Requires the mcp:report:stock permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"filters": map[string]any{
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product). Leaf or group UUIDs — applied as IN HIERARCHY.",
+							},
+							"warehouse_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by warehouse IDs (from resolve_warehouse).",
+							},
+							"customer_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by customer IDs (from resolve_customer). Applied as IN HIERARCHY, so a customer-group UUID matches every customer inside it.",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm.",
+							},
+							"expires_before": map[string]any{
+								"type":        "string",
+								"format":      "date",
+								"description": "Keep only reservations expiring on or before this date (YYYY-MM-DD). Pass today to list EXPIRED reservations that still hold stock. Open-ended reservations (no expiry set) are excluded by this filter.",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"warehouse", "product", "product_group", "customer", "firm", "document", "reserved_at", "reserved_until"}},
+						"description": "Group results by dimensions (default: warehouse, product, customer, document). reserved_at/reserved_until return ISO date strings. Do not combine product with product_group; the redundant one is dropped.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"qty", "documents"}},
+						"description": "Measures to include (default: qty)",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order (sort.field must be a selected dimension or measure; default qty desc)",
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{

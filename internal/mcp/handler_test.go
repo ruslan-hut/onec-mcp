@@ -577,3 +577,67 @@ func TestResolveFirmCallsOneC(t *testing.T) {
 		t.Errorf("query = %v, want ТОВ", got.body["query"])
 	}
 }
+
+// Инструмент без записи в ToolScopes исчезает из tools/list для OAuth-ключей (фильтр
+// пропускает неизвестные) и отбивается на вызове — то есть новый инструмент, забытый в
+// карте прав, молча не существует. Проверяем всё разом, а не по одному имени.
+func TestEveryToolHasScope(t *testing.T) {
+	for _, tool := range GetTools() {
+		if _, ok := ToolScopes[tool.Name]; !ok {
+			t.Errorf("tool %q has no entry in ToolScopes", tool.Name)
+		}
+	}
+}
+
+// stock_reserves ходит в свой отчёт 1С и не выдумывает параметр date: регистр резервов
+// хранит текущее состояние, и «на дату» обещало бы историю, которой нет.
+func TestStockReservesRequest(t *testing.T) {
+	h, fake := newTestHandler(t)
+
+	callTool(t, h, ToolStockReserves, map[string]any{
+		"group_by": []string{"warehouse", "product", "customer", "document"},
+		"filters": map[string]any{
+			"customer_ids":   []string{"cust-1"},
+			"expires_before": "2026-09-07",
+		},
+	})
+
+	got := fake.recorded(t, 0)
+
+	if got.path != "/mcp/reports/reserves" {
+		t.Errorf("path = %q, want /mcp/reports/reserves", got.path)
+	}
+
+	if _, ok := got.body["date"]; ok {
+		t.Errorf("request must not carry date: %v", got.body)
+	}
+
+	filters, ok := got.body["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("filters missing in %v", got.body)
+	}
+
+	if filters["expires_before"] != "2026-09-07" {
+		t.Errorf("expires_before = %v, want 2026-09-07", filters["expires_before"])
+	}
+}
+
+// Отбор, которого у резервов нет (например, поставщик), должен отбиваться гейтом,
+// а не тихо теряться при разборе тела.
+func TestStockReservesRejectsUnknownFilter(t *testing.T) {
+	h, fake := newTestHandler(t)
+
+	res := callTool(t, h, ToolStockReserves, map[string]any{
+		"filters": map[string]any{"supplier_ids": []string{"sup-1"}},
+	})
+
+	if !res.IsError {
+		t.Fatal("unsupported filter must fail")
+	}
+	if !strings.Contains(resultText(t, res), "supplier_ids") {
+		t.Errorf("error must name the key, got: %s", resultText(t, res))
+	}
+	if n := fake.count(); n != 0 {
+		t.Errorf("1C got %d requests, wanted none", n)
+	}
+}

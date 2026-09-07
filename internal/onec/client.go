@@ -502,6 +502,17 @@ func (c *Client) GoodsInTransit(ctx context.Context, req *GoodsInTransitRequest)
 	return resp, nil
 }
 
+// StockReserves — детализация резервов (регистр РезервыТоваров). Ответ пробрасывается
+// как есть: состав колонок задаёт 1С.
+func (c *Client) StockReserves(ctx context.Context, req *ReservesRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/reserves", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
 // TopProducts / CustomerSummary возвращаются как json.RawMessage —
 // гейту достаточно прокинуть тело наверх, без декомпозиции в типизированную структуру.
 // Это позволяет добавлять поля в 1С-стороне без правки гейта.

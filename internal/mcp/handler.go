@@ -249,6 +249,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callPurchasesReport(r, params.Arguments)
 	case ToolGoodsInTransit:
 		result, err = h.callGoodsInTransit(r, params.Arguments)
+	case ToolStockReserves:
+		result, err = h.callStockReserves(r, params.Arguments)
 	case ToolSalesReport:
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
@@ -780,6 +782,40 @@ func (h *Handler) callGoodsInTransit(r *http.Request, args any) (*CallToolResult
 	}
 
 	resp, err := h.onecClient.GoodsInTransit(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type reservesArgs struct {
+	Filters  onec.ReservesFilters `json:"filters"`
+	GroupBy  []string             `json:"group_by"`
+	Measures []string             `json:"measures"`
+	Top      flexInt              `json:"top"`
+	Sort     []onec.SortSpec      `json:"sort"`
+}
+
+// callStockReserves — детализация резервов. Даты в запросе нет: регистр хранит текущее
+// состояние, и параметр «на дату» обещал бы историю, которой не существует.
+func (h *Handler) callStockReserves(r *http.Request, args any) (*CallToolResult, error) {
+	var a reservesArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.ReservesRequest{
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      h.clampTop(a.Top),
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.StockReserves(r.Context(), req)
 	if err != nil {
 		return nil, err
 	}
