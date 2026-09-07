@@ -141,7 +141,8 @@
     "unavailable": [
       "availability_report",
       "goods_in_transit",
-      "product_details"
+      "product_details",
+      "stock_reserves"
     ]
   },
   "resolvers": {

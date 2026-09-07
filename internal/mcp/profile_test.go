@@ -336,7 +336,9 @@ func TestRealProfileShapesTools(t *testing.T) {
 		t.Errorf("purchases_report measures still offer amount_currency: %v", measures)
 	}
 
-	for _, name := range []string{ToolAvailabilityReport, ToolGoodsInTransit, ToolProductDetails} {
+	// Имя в профиле — имя ИНСТРУМЕНТА гейта, а не типа отчёта 1С: строка "reserves" вместо
+	// "stock_reserves" не спрятала бы ничего, и модель получала бы от базы 400.
+	for _, name := range []string{ToolAvailabilityReport, ToolGoodsInTransit, ToolProductDetails, ToolStockReserves} {
 		for _, tool := range tools {
 			if tool.Name == name {
 				t.Errorf("tool %s is not implemented in this database but is still listed", name)
