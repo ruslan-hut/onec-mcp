@@ -456,9 +456,9 @@ Get available tools and their JSON schemas.
 
 > The list above is abbreviated. The actual set returned by `tools/list` is **filtered by the
 > caller's OAuth scopes** (when OAuth is enabled): a tool is only shown if its required scope is
-> granted. So the admin tools (`event_log`, `object_history`, `find_document`, `document_card`,
-> `register_records`, `catalog_item`, `jobs_status`) appear only for
-> tokens carrying `mcp:admin:eventlog`, and `sales_report`'s `cost`/`profit`/`margin` measures are
+> granted. So `event_log`, `object_history` and `find_document` appear only for
+> tokens carrying `mcp:admin:eventlog`, the data tools (`document_card`, `register_records`,
+> `catalog_item`, `jobs_status`) only for `mcp:admin:data`, and `sales_report`'s `cost`/`profit`/`margin` measures are
 > stripped without `mcp:report:cost`. There are also tools not shown here (resolve
 > `sales_channel`/`cash`/`cost_article`/`operation`, reports `top_products`/`customer_summary`).
 
@@ -937,8 +937,11 @@ document. Those two pairs differing is normal, not an error.
 
 ## Admin Tools (event log and raw data)
 
-Seven tools, all gated by the **`mcp:admin:eventlog`** scope (the log contains PII, and the data
-tools return the same class of data). They are visible in `tools/list` only for tokens that carry this scope. The tool
+Seven tools in two groups, each with its own scope. `event_log`, `object_history` and
+`find_document` read the event log and are gated by **`mcp:admin:eventlog`** (the log contains
+PII). `document_card`, `register_records`, `catalog_item` and `jobs_status` read the data itself
+and are gated by **`mcp:admin:data`**: the log answers what PEOPLE did, these answer what the
+ACCOUNTING says — different jobs, usually different people. They are visible in `tools/list` only for tokens that carry this scope. The tool
 result `content[].text` is the JSON returned by 1C (see `onec-integration.md` for the full payload
 shape). On the 1C side reads run in privileged mode, so the service user needs no extra rights.
 

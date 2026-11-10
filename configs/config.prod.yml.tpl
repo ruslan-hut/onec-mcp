@@ -34,6 +34,7 @@ oauth:
     - "mcp:report:money"
     - "mcp:report:cost"
     - "mcp:admin:eventlog"
+    - "mcp:admin:data"
   rate_limit:
     authorize_per_minute: 10
     register_per_minute: 30

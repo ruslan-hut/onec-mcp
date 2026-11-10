@@ -48,6 +48,7 @@ oauth:
     - "mcp:report:money"
     - "mcp:report:cost"
     - "mcp:admin:eventlog"
+    - "mcp:admin:data"
   # Per-IP лимиты на минуту, 0 = отключено. Защита от brute-force ключей. Общие для всех баз.
   rate_limit:
     authorize_per_minute: 10

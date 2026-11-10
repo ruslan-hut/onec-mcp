@@ -18,10 +18,10 @@ The Go service acts as a gateway and expects 1C to provide three HTTP endpoints:
 | `POST /mcp/reports/product_details` | Batch product status attributes — see `category-watchdog-contract.md` |
 | `POST /mcp/admin/eventlog` | Read the event log (журнал регистрации) — gated by `mcp:admin:eventlog` |
 | `POST /mcp/admin/find_document` | Resolve a document to its UUID — gated by `mcp:admin:eventlog` |
-| `POST /mcp/admin/document_card` | One document: header, tabular sections, movements, related documents — gated by `mcp:admin:eventlog` |
-| `POST /mcp/admin/register_records` | Raw records of an information / accumulation register — gated by `mcp:admin:eventlog` |
-| `POST /mcp/admin/catalog_item` | One catalog item with all its attributes — gated by `mcp:admin:eventlog` |
-| `POST /mcp/admin/jobs_status` | Scheduled jobs: enabled flag, schedule, last runs — gated by `mcp:admin:eventlog` |
+| `POST /mcp/admin/document_card` | One document: header, tabular sections, movements, related documents — gated by `mcp:admin:data` |
+| `POST /mcp/admin/register_records` | Raw records of an information / accumulation register — gated by `mcp:admin:data` |
+| `POST /mcp/admin/catalog_item` | One catalog item with all its attributes — gated by `mcp:admin:data` |
+| `POST /mcp/admin/jobs_status` | Scheduled jobs: enabled flag, schedule, last runs — gated by `mcp:admin:data` |
 
 Base URL is configured via `onec.base_url` in config.
 

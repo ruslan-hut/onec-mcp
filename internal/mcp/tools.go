@@ -53,6 +53,11 @@ const (
 // X-MCP-Scopes (defense in depth).
 const ScopeReportCost = "mcp:report:cost"
 
+// ScopeAdminData — чтение первички базы: реквизиты документов и справочников, записи
+// регистров, состояние регламентных заданий. Должен быть в supported_scopes конфига гейта,
+// иначе инструменты срежутся при DCR-регистрации до выпуска токена.
+const ScopeAdminData = "mcp:admin:data"
+
 // CostMeasures — меры, закрытые правом ScopeReportCost, по инструментам. Должны быть синхронны
 // с белыми списками мер в CommonModules/MCP (BSL) и со значениями enum в схемах ниже.
 //
@@ -149,12 +154,13 @@ var ToolScopes = map[string]string{
 	ToolObjectHistory: "mcp:admin:eventlog",
 	ToolFindDocument:  "mcp:admin:eventlog",
 	// Чтение первички: реквизиты документов и справочников, записи регистров, состояние
-	// регламентных заданий. Класс данных тот же, что в журнале (PII, суммы), поэтому до
-	// появления отдельного mcp:admin:data они закрыты тем же правом — так же, как в 1С.
-	ToolDocumentCard:    "mcp:admin:eventlog",
-	ToolRegisterRecords: "mcp:admin:eventlog",
-	ToolCatalogItem:     "mcp:admin:eventlog",
-	ToolJobsStatus:      "mcp:admin:eventlog",
+	// регламентных заданий. Отдельное право от журнала: журнал нужен, чтобы разобрать
+	// ДЕЙСТВИЯ людей, а карточки и регистры — чтобы разобрать УЧЁТНЫЙ случай. Это разные
+	// задачи и, как правило, разные люди. Финально право проверяется в 1С по X-MCP-Scopes.
+	ToolDocumentCard:    ScopeAdminData,
+	ToolRegisterRecords: ScopeAdminData,
+	ToolCatalogItem:     ScopeAdminData,
+	ToolJobsStatus:      ScopeAdminData,
 	// Производственный блок целиком закрыт правом на себестоимость: спецификация раскрывает
 	// рецептуру продукта, а отчёты по выпуску — стоимость сырья в каждом изделии.
 	// resolve_material — часть того же контура: названия сырья спецификации и так раскрывают,
@@ -1315,7 +1321,7 @@ func GetTools() []Tool {
 				"Returns {id, object_type, presentation, header{number,date,posted,deletion_mark}, attributes{...}}, plus tables / movements / related when asked. " +
 				"attributes carries every header attribute of that document type under its 1C name, with references rendered as {id,label,type}; string attributes whose name looks like a secret (password, token, key) come back masked. " +
 				"movements is a per-register summary (record count and summed resources; for balance registers receipt and expense are netted). related lists documents whose ДокументОснование points at this one. " +
-				"Requires the mcp:admin:eventlog permission.",
+				"Requires the mcp:admin:data permission.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1365,7 +1371,7 @@ func GetTools() []Tool {
 				"register is the register metadata name (prefix 'InformationRegister.' / 'AccumulationRegister.' only needed when the same name exists in both). " +
 				"filter maps a dimension, resource or attribute NAME to a value: plain string/number/boolean for simple types, the UUID for a reference field with a single reference type, the VALUE NAME for an enum field, or {\"type\":\"Document.X\",\"id\":\"<uuid>\"} for a composite one. An unknown field name is refused rather than silently ignored. " +
 				"Returns {register, periodic, fields[], count, truncated, records[]} with every field of the record (Period, Recorder, dimensions, resources, attributes), references as {id,label,type}. " +
-				"For balances and turnovers use the stock / money reports instead — this tool does not aggregate. Requires the mcp:admin:eventlog permission.",
+				"For balances and turnovers use the stock / money reports instead — this tool does not aggregate. Requires the mcp:admin:data permission.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1404,7 +1410,7 @@ func GetTools() []Tool {
 				"The resolve_* tools return only id and label — use this when the SETTINGS behind an item matter (which cash register a delivery service posts to, which firm a warehouse belongs to, what is switched on for a site). " +
 				"Identify the item by `id` (UUID from resolve_*), by `code` (exact) or by `name` (substring); an ambiguous name is refused with the candidates and their ids. " +
 				"Returns {id, object_type, presentation, header{...}, attributes{...}} and tables when asked; references come as {id,label,type}, and string attributes whose name looks like a secret (password, token, key) come back masked. " +
-				"Catalogs that hold nothing but credentials are not readable at all. Requires the mcp:admin:eventlog permission.",
+				"Catalogs that hold nothing but credentials are not readable at all. Requires the mcp:admin:data permission.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1441,7 +1447,7 @@ func GetTools() []Tool {
 				"Whether a job is enabled lives in the infobase, not in the configuration — when a nightly routine 'did not happen', this is the only way to tell a disabled job from a failing one. " +
 				"Pass `name` to narrow to one job by a substring of its name, synonym or description; omit it for all of them. " +
 				"Returns {count, jobs[{name, synonym, description, method, use, key, schedule, runs[{begin, end, state, error}]}]}. An empty runs list means the run history (which the platform trims) holds nothing, not that the job never ran. " +
-				"Requires the mcp:admin:eventlog permission.",
+				"Requires the mcp:admin:data permission.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
