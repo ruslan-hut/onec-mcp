@@ -84,7 +84,7 @@ func main() {
 			Password:     cfg.Admin.Password,
 			PublicURL:    cfg.OAuth.PublicURL,
 			OAuthEnabled: cfg.OAuth.Enabled,
-			GlobalScopes: cfg.OAuth.SupportedScopes,
+			GlobalScopes: mcp.EnsureToolScopes(cfg.OAuth.SupportedScopes),
 		}, tenantStore, registry, log).Routes()
 		log.Info("admin UI enabled", "path", "/admin")
 	} else {
@@ -257,5 +257,9 @@ func scopesFor(cfg *config.Config, rec *tenant.Tenant) (defaults, supported []st
 	if len(supported) == 0 {
 		supported = defaults
 	}
-	return defaults, supported
+
+	// Права инструментов дописываются к любому из списков - и к глобальному, и к списку базы:
+	// иначе инструмент с новым правом молча пропадает у всех, кто когда-то задал список вручную.
+	// Доступ от этого не расширяется, его решают scopes аккаунта в 1С (см. EnsureToolScopes).
+	return defaults, mcp.EnsureToolScopes(supported)
 }

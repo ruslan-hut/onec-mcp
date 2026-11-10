@@ -44,6 +44,62 @@ const (
 	ToolProductionDocumentDetail = "production_document"
 )
 
+// AllToolScopes — все права, которыми закрыты инструменты, в порядке первого появления
+// в списке инструментов. Источник истины — ToolScopes: добавил инструмент с новым правом,
+// и право автоматически попало сюда.
+func AllToolScopes() []string {
+	seen := make(map[string]bool, len(ToolScopes))
+	out := make([]string, 0, len(ToolScopes))
+
+	for _, tool := range GetTools() {
+		scope, ok := ToolScopes[tool.Name]
+		if !ok || scope == "" || seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		out = append(out, scope)
+	}
+
+	// Право на себестоимость закрывает ещё и отдельные меры sales_report, а не только
+	// инструменты целиком — если ни один инструмент его не требует, оно всё равно нужно.
+	if !seen[ScopeReportCost] {
+		out = append(out, ScopeReportCost)
+	}
+
+	return out
+}
+
+// EnsureToolScopes — дописывает к списку scope те права инструментов, которых в нём нет.
+//
+// Scope, объявленный в коде и забытый в конфиге, исчезает молча: metadata его не анонсирует,
+// DCR-регистрация вырезает (intersectScopes), токен его не получает, инструмент пропадает
+// из tools/list — и ни одной ошибки нигде. Именно так mcp:admin:data не доехал до прода.
+//
+// Доступ это не раздаёт: право лишь становится ЗАПРАШИВАЕМЫМ. Кому оно достанется, решает
+// 1С — scopes аккаунта (MCP.AccountScopes), с которыми пересекается запрос в authorize.
+// Порядок исходного списка сохраняется: он виден в metadata и читается людьми.
+func EnsureToolScopes(list []string) []string {
+	have := make(map[string]bool, len(list))
+	out := make([]string, 0, len(list)+4)
+
+	for _, scope := range list {
+		if scope == "" || have[scope] {
+			continue
+		}
+		have[scope] = true
+		out = append(out, scope)
+	}
+
+	for _, scope := range AllToolScopes() {
+		if !have[scope] {
+			have[scope] = true
+			out = append(out, scope)
+		}
+	}
+
+	return out
+}
+
 // ScopeReportCost — доступ к себестоимости. Исторически это measure-level право (меры
 // cost/profit/margin внутри sales_report), поэтому оно проверяется отдельно от ToolScopes
 // при фильтрации схемы в handleToolsList. Начиная с производственного блока это ещё и
