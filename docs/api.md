@@ -456,7 +456,8 @@ Get available tools and their JSON schemas.
 
 > The list above is abbreviated. The actual set returned by `tools/list` is **filtered by the
 > caller's OAuth scopes** (when OAuth is enabled): a tool is only shown if its required scope is
-> granted. So the admin tools (`event_log`, `object_history`, `find_document`) appear only for
+> granted. So the admin tools (`event_log`, `object_history`, `find_document`, `document_card`,
+> `register_records`, `catalog_item`, `jobs_status`) appear only for
 > tokens carrying `mcp:admin:eventlog`, and `sales_report`'s `cost`/`profit`/`margin` measures are
 > stripped without `mcp:report:cost`. There are also tools not shown here (resolve
 > `sales_channel`/`cash`/`cost_article`/`operation`, reports `top_products`/`customer_summary`).
@@ -934,10 +935,10 @@ document. Those two pairs differing is normal, not an error.
 
 ---
 
-## Admin Tools (event log)
+## Admin Tools (event log and raw data)
 
-Three tools for event-log analysis, all gated by the **`mcp:admin:eventlog`** scope (the log
-contains PII). They are visible in `tools/list` only for tokens that carry this scope. The tool
+Seven tools, all gated by the **`mcp:admin:eventlog`** scope (the log contains PII, and the data
+tools return the same class of data). They are visible in `tools/list` only for tokens that carry this scope. The tool
 result `content[].text` is the JSON returned by 1C (see `onec-integration.md` for the full payload
 shape). On the 1C side reads run in privileged mode, so the service user needs no extra rights.
 
@@ -980,6 +981,68 @@ Resolve a document to its UUID so it can be audited via `object_history`.
 | `limit` | integer | No | Max candidates (default 20, max 100). |
 
 \* At least one of `number` or `period` is required.
+
+### `document_card`
+
+Everything stored in ONE document — the tool for a single case the reports cannot explain (why a
+document was skipped by a scheduled job, which cash order was entered against it). References come
+back as `{id,label,type}`; string attributes whose name looks like a secret (password, token, key)
+are masked. An ambiguous `number` is refused with the candidates and their ids.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `doc_type` | string | Yes | Document metadata name (`РасходнаяНакладная`); `Document.` prefix optional. |
+| `id` | string | No\* | Document UUID — unambiguous, preferred. |
+| `number` | string | No\* | Document number or substring, when the UUID is unknown. |
+| `period.from` / `period.to` | string | No | Window narrowing the search by number. |
+| `tables` | bool / array | No | `true` for all tabular sections, or a list of section names. |
+| `table_rows` | integer | No | Rows per section (default 50, max 500). |
+| `movements` | bool | No | Per-register summary of the document's postings. |
+| `related` | bool | No | Documents entered on the basis of this one (`ДокументОснование`). |
+
+\* Either `id`, or `number` (optionally with `period`).
+
+### `register_records`
+
+Raw records of one register under a filter — the facts as written, not aggregates. For balances and
+turnovers use the stock / money reports instead.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `register` | string | Yes | Register metadata name (`ДанныеТТН`); `InformationRegister.` / `AccumulationRegister.` prefix only needed to disambiguate. |
+| `filter` | object | No | Field name → value. Reference field: UUID, or `{"type":"Document.X","id":"<uuid>"}` for a composite type. Enum field: the value name. An unknown field name is refused. |
+| `period.from` / `period.to` | string | No | Window on `Period` (periodic registers only). |
+| `limit` | integer | No | Max records (default 50, max 500). |
+| `order` | string | No | `desc` (default) or `asc` by `Period`. |
+
+### `catalog_item`
+
+One catalog item with every attribute — the settings behind a name that `resolve_*` does not show.
+Catalogs holding nothing but credentials are not readable.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `catalog` | string | Yes | Catalog metadata name (`ShipmentService`); `Catalog.` prefix optional. |
+| `id` | string | No\* | Item UUID (from `resolve_*`). |
+| `code` | string | No\* | Item code, exact match. |
+| `name` | string | No\* | Description or a substring of it. |
+| `tables` | bool / array | No | Tabular sections, as in `document_card`. |
+| `table_rows` | integer | No | Rows per section (default 50, max 500). |
+
+\* Exactly one of `id`, `code` or `name`; an ambiguous `name` is refused with the candidates.
+
+### `jobs_status`
+
+Scheduled jobs as the infobase has them: whether each is switched on, its schedule and its last
+runs. The enabled flag and the schedule live in the infobase, not in the configuration, so this is
+the only way to tell a disabled job from a failing one. An empty `runs` list means the platform's
+run history holds nothing, not that the job never ran.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `name` | string | No | Substring of the job name, synonym or description. |
+| `runs` | bool | No | Include last runs (default `true`). |
+| `runs_limit` | integer | No | Runs per job (default 3, max 20). |
 
 **Example — "list errors today":**
 ```json

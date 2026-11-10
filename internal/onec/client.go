@@ -583,6 +583,26 @@ func (c *Client) FindDocument(ctx context.Context, body any) (json.RawMessage, e
 	return resp, nil
 }
 
+// Админ-действия чтения данных базы: сегмент пути берётся только из этих констант,
+// наружу он не параметризуется.
+const (
+	AdminDocumentCard    = "document_card"
+	AdminRegisterRecords = "register_records"
+	AdminCatalogItem     = "catalog_item"
+	AdminJobsStatus      = "jobs_status"
+)
+
+// AdminData проксирует тело админ-инструмента чтения данных (карточка документа, записи
+// регистра, элемент справочника, состояние регламентных заданий) в 1С. Тело и ответ —
+// passthrough, как у EventLog: поля разбирает 1С, новые поля не требуют правок гейта.
+func (c *Client) AdminData(ctx context.Context, action string, body any) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/admin/"+action, body, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // VerifyMCPKey проверяет MCP-ключ через 1С. Возвращает APIError со статусом 401, если ключ невалиден —
 // вызывающий код должен это отличать от network/server ошибок.
 func (c *Client) VerifyMCPKey(ctx context.Context, key string) (*AuthVerifyResponse, error) {

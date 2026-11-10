@@ -287,6 +287,14 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callEventLog(r, params.Arguments)
 	case ToolFindDocument:
 		result, err = h.callFindDocument(r, params.Arguments)
+	case ToolDocumentCard:
+		result, err = h.callAdminData(r, onec.AdminDocumentCard, params.Arguments)
+	case ToolRegisterRecords:
+		result, err = h.callAdminData(r, onec.AdminRegisterRecords, params.Arguments)
+	case ToolCatalogItem:
+		result, err = h.callAdminData(r, onec.AdminCatalogItem, params.Arguments)
+	case ToolJobsStatus:
+		result, err = h.callAdminData(r, onec.AdminJobsStatus, params.Arguments)
 	case ToolProductSpecification:
 		result, err = h.callSpecification(r, onec.ReportSpecification, params.Arguments)
 	case ToolSpecificationCost:
@@ -1092,6 +1100,19 @@ func (h *Handler) callCustomerSummary(r *http.Request, args any) (*CallToolResul
 // то самое, ради которого он написан, — ломало ровно эти три вызова, а не остальные.
 func (h *Handler) callEventLog(r *http.Request, args any) (*CallToolResult, error) {
 	resp, err := h.onecClient.EventLog(r.Context(), unstringifyJSON(args))
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+// callAdminData — общий обработчик админ-инструментов чтения данных: тело уходит в 1С как
+// есть, ответ отдаётся наверх без разбора (как callEventLog).
+func (h *Handler) callAdminData(r *http.Request, action string, args any) (*CallToolResult, error) {
+	resp, err := h.onecClient.AdminData(r.Context(), action, unstringifyJSON(args))
 	if err != nil {
 		return nil, err
 	}

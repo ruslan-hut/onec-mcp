@@ -27,6 +27,10 @@ const (
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
+	ToolDocumentCard        = "document_card"
+	ToolRegisterRecords     = "register_records"
+	ToolCatalogItem         = "catalog_item"
+	ToolJobsStatus          = "jobs_status"
 
 	// Производственный блок: спецификации (нормы расхода) и документы Производство.
 	ToolProductSpecification     = "product_specification"
@@ -144,6 +148,13 @@ var ToolScopes = map[string]string{
 	ToolEventLog:      "mcp:admin:eventlog",
 	ToolObjectHistory: "mcp:admin:eventlog",
 	ToolFindDocument:  "mcp:admin:eventlog",
+	// Чтение первички: реквизиты документов и справочников, записи регистров, состояние
+	// регламентных заданий. Класс данных тот же, что в журнале (PII, суммы), поэтому до
+	// появления отдельного mcp:admin:data они закрыты тем же правом — так же, как в 1С.
+	ToolDocumentCard:    "mcp:admin:eventlog",
+	ToolRegisterRecords: "mcp:admin:eventlog",
+	ToolCatalogItem:     "mcp:admin:eventlog",
+	ToolJobsStatus:      "mcp:admin:eventlog",
 	// Производственный блок целиком закрыт правом на себестоимость: спецификация раскрывает
 	// рецептуру продукта, а отчёты по выпуску — стоимость сырья в каждом изделии.
 	// resolve_material — часть того же контура: названия сырья спецификации и так раскрывают,
@@ -1293,6 +1304,160 @@ func GetTools() []Tool {
 					},
 				},
 				"required": []string{"doc_type"},
+			},
+		},
+		{
+			Name: ToolDocumentCard,
+			Description: "Full card of ONE 1C document: header attributes as they are stored, and optionally its tabular sections, its register movements and the documents entered on its basis. " +
+				"Use it to explain a single case the reports cannot answer — why a document was not picked up by a scheduled job, what its flags say, which cash order was entered against it. " +
+				"Identify the document either by `id` (UUID from find_document or from a report's document dimension) or by `number` (+ `period` to narrow it); an ambiguous number is refused with the list of candidates and their ids. " +
+				"doc_type is the document metadata name, e.g. 'РасходнаяНакладная' (the 'Document.' prefix is optional). " +
+				"Returns {id, object_type, presentation, header{number,date,posted,deletion_mark}, attributes{...}}, plus tables / movements / related when asked. " +
+				"attributes carries every header attribute of that document type under its 1C name, with references rendered as {id,label,type}; string attributes whose name looks like a secret (password, token, key) come back masked. " +
+				"movements is a per-register summary (record count and summed resources; for balance registers receipt and expense are netted). related lists documents whose ДокументОснование points at this one. " +
+				"Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"doc_type": map[string]any{
+						"type":        "string",
+						"description": "Document metadata name, e.g. РасходнаяНакладная, ДокументОтгрузки, КассовыйОрдер. 'Document.' prefix optional.",
+					},
+					"id": map[string]any{
+						"type":        "string",
+						"description": "Document UUID (from find_document or a report dimension). Preferred — it is unambiguous.",
+					},
+					"number": map[string]any{
+						"type":        "string",
+						"description": "Document number or a substring of it, when the UUID is unknown.",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Date window narrowing the search by number",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"tables": map[string]any{
+						"description": "true for all tabular sections, or an array of section names (e.g. [\"Товары\"]). Omitted — the header only.",
+					},
+					"table_rows": map[string]any{
+						"type":        "integer",
+						"description": "Maximum rows per tabular section (default 50, max 500).",
+					},
+					"movements": map[string]any{
+						"type":        "boolean",
+						"description": "Add the per-register summary of this document's postings.",
+					},
+					"related": map[string]any{
+						"type":        "boolean",
+						"description": "Add documents entered on the basis of this one (ДокументОснование).",
+					},
+				},
+				"required": []string{"doc_type"},
+			},
+		},
+		{
+			Name: ToolRegisterRecords,
+			Description: "Raw records of one 1C register (регистр сведений or регистр накопления) under a filter — the facts as written, not aggregates. " +
+				"Reports answer 'how much'; this answers 'what exactly is stored and since when' — e.g. the carrier status and payment amount of a waybill, or the history of a value that changes over time. " +
+				"register is the register metadata name (prefix 'InformationRegister.' / 'AccumulationRegister.' only needed when the same name exists in both). " +
+				"filter maps a dimension, resource or attribute NAME to a value: plain string/number/boolean for simple types, the UUID for a reference field with a single reference type, the VALUE NAME for an enum field, or {\"type\":\"Document.X\",\"id\":\"<uuid>\"} for a composite one. An unknown field name is refused rather than silently ignored. " +
+				"Returns {register, periodic, fields[], count, truncated, records[]} with every field of the record (Period, Recorder, dimensions, resources, attributes), references as {id,label,type}. " +
+				"For balances and turnovers use the stock / money reports instead — this tool does not aggregate. Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"register": map[string]any{
+						"type":        "string",
+						"description": "Register metadata name, e.g. ДанныеТТН, ТТННакладной. Prefix 'InformationRegister.' or 'AccumulationRegister.' optional.",
+					},
+					"filter": map[string]any{
+						"type":        "object",
+						"description": "Field name → value. Reference fields take a UUID (or {type,id}), enum fields take the value name.",
+					},
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Window on the register's Period field (periodic registers only)",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum records to return (default 50, max 500).",
+					},
+					"order": map[string]any{
+						"type":        "string",
+						"enum":        []string{"asc", "desc"},
+						"description": "Order by Period: 'desc' (default, newest first) or 'asc'.",
+					},
+				},
+				"required": []string{"register"},
+			},
+		},
+		{
+			Name: ToolCatalogItem,
+			Description: "Full card of ONE catalog item (элемент справочника): every attribute as stored, plus code, description, parent, owner and the deletion mark. " +
+				"The resolve_* tools return only id and label — use this when the SETTINGS behind an item matter (which cash register a delivery service posts to, which firm a warehouse belongs to, what is switched on for a site). " +
+				"Identify the item by `id` (UUID from resolve_*), by `code` (exact) or by `name` (substring); an ambiguous name is refused with the candidates and their ids. " +
+				"Returns {id, object_type, presentation, header{...}, attributes{...}} and tables when asked; references come as {id,label,type}, and string attributes whose name looks like a secret (password, token, key) come back masked. " +
+				"Catalogs that hold nothing but credentials are not readable at all. Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"catalog": map[string]any{
+						"type":        "string",
+						"description": "Catalog metadata name, e.g. ShipmentService, ТО_КассовыеАппараты, Склады. 'Catalog.' prefix optional.",
+					},
+					"id": map[string]any{
+						"type":        "string",
+						"description": "Item UUID (from resolve_*). Preferred — it is unambiguous.",
+					},
+					"code": map[string]any{
+						"type":        "string",
+						"description": "Item code, exact match.",
+					},
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Item description or a substring of it.",
+					},
+					"tables": map[string]any{
+						"description": "true for all tabular sections, or an array of section names.",
+					},
+					"table_rows": map[string]any{
+						"type":        "integer",
+						"description": "Maximum rows per tabular section (default 50, max 500).",
+					},
+				},
+				"required": []string{"catalog"},
+			},
+		},
+		{
+			Name: ToolJobsStatus,
+			Description: "State of the 1C scheduled jobs (регламентные задания): whether each one is switched ON, its schedule, and its last runs with state and error text. " +
+				"Whether a job is enabled lives in the infobase, not in the configuration — when a nightly routine 'did not happen', this is the only way to tell a disabled job from a failing one. " +
+				"Pass `name` to narrow to one job by a substring of its name, synonym or description; omit it for all of them. " +
+				"Returns {count, jobs[{name, synonym, description, method, use, key, schedule, runs[{begin, end, state, error}]}]}. An empty runs list means the run history (which the platform trims) holds nothing, not that the job never ran. " +
+				"Requires the mcp:admin:eventlog permission.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Substring of the job name, synonym or description, e.g. 'Фискализация'.",
+					},
+					"runs": map[string]any{
+						"type":        "boolean",
+						"description": "Include the last runs of each job (default true).",
+					},
+					"runs_limit": map[string]any{
+						"type":        "integer",
+						"description": "How many runs per job (default 3, max 20).",
+					},
+				},
 			},
 		},
 		{
